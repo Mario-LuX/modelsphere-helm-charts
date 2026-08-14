@@ -1,0 +1,51 @@
+{{- if .Values.scaler.enabled -}}
+apiVersion: autoscaling.4pd.io/v1alpha1
+kind: LLMScaler
+metadata:
+  name: {{ .Release.Name }}-scaler
+spec:
+  syncPeriodSeconds: {{ .Values.scaler.syncPeriodSeconds }}
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ .Release.Name }}-vllm
+  {{- if .Values.metricsMock.enabled }}
+  # Driven by the metrics-mock (returns a fixed value) to simulate scaling.
+  serverAddress: "http://{{ .Release.Name }}-metrics-mock.{{ .Release.Namespace }}:9090"
+  {{- else }}
+  serverAddress: {{ .Values.scaler.serverAddress | quote }}
+  {{- end }}
+  {{- with .Values.scaler.serverHeaders }}
+  serverHeaders:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  minReplicas: {{ .Values.scaler.minReplicas }}
+  maxReplicas: {{ .Values.scaler.maxReplicas }}
+  {{- /* __SCOPE__ in any query expands to namespace="<ns>", app="<release>-vllm"
+         to scope it to THIS deployment's pods (app needs podTargetLabels: [app]
+         on the ServiceMonitor; namespace is always present). */}}
+  {{- $scope := printf "namespace=\"%s\", app=\"%s-vllm\"" .Release.Namespace .Release.Name }}
+  metrics:
+    {{- range .Values.scaler.metrics }}
+    - query: {{ .query | replace "__SCOPE__" $scope | quote }}
+      target: {{ .target | quote }}
+      {{- with .name }}
+      name: {{ . | quote }}
+      {{- end }}
+    {{- end }}
+  {{- with .Values.scaler.scaleDown }}
+  scaleDown:
+    {{- with .behavior }}
+    behavior: {{ . }}
+    {{- end }}
+    {{- with .stabilizationWindowSeconds }}
+    stabilizationWindowSeconds: {{ . }}
+    {{- end }}
+    {{- with .maxStepReplicas }}
+    maxStepReplicas: {{ . }}
+    {{- end }}
+    {{- with .deletionCostQuery }}
+    deletionCostQuery: {{ . | replace "__SCOPE__" $scope | quote }}
+    {{- end }}
+  {{- end }}
+{{- end -}}

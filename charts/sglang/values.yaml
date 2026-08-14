@@ -1,0 +1,274 @@
+# Only used when scaler.enabled is false. With the scaler on, the chart omits
+# spec.replicas entirely so the operator can own it (see deployment.yaml), and
+# the starting count comes from scaler.minReplicas instead.
+replicaCount: 1
+
+image:
+  repository: "lmsysorg/sglang"
+  tag: "latest"
+
+model:
+  # The Hugging Face repo ID
+  name: "facebook/opt-125m"
+  # Where the models are cached on the host node
+  localPath: "/mnt/disk0/models/facebook/opt-125m"
+  # Where localPath is mounted inside the container. Feeds both the volumeMount
+  # and --model-path, so the two cannot drift apart.
+  mountPath: "/models"
+  # `Directory` makes the kubelet refuse to start the pod when localPath does not
+  # exist on the node, surfacing a FailedMount event immediately.
+  # `DirectoryOrCreate` would instead create an empty directory and hand it to
+  # the engine, which then fails minutes later with an error pointing at the
+  # model rather than at the mount.
+  hostPathType: Directory
+  # Leave empty to omit --context-length entirely and let SGLang use the model's
+  # own. Only pin it when you really mean to cap the context.
+  contextLength: "1024"
+  gpus: "1"
+
+# Init container that checks the mounted model directory before the engine gets
+# a chance to start. hostPathType: Directory already catches a missing path; this
+# catches the cases it cannot see -- an empty directory, or a half-synced one
+# where the weights never finished copying. Failing here costs seconds and says
+# exactly what is wrong, instead of a multi-minute load ending in a stack trace.
+#
+# It reuses the engine image, so nothing extra has to be pulled or mirrored into
+# a private registry, and it needs no GPU.
+modelCheck:
+  enabled: true
+  # Each glob must match at least one entry directly under model.mountPath.
+  # Empty the list to only assert the directory is non-empty.
+  requiredGlobs:
+    - "config.json"
+
+# Extra SGLang server flags, appended verbatim to the command line (e.g.
+# --tp-size=2, --mem-fraction-static=0.83). The chart already emits
+# --model-path, --served-model-name, --host, --port and --enable-metrics, so do
+# not repeat those here.
+extraArgs: []
+
+service:
+  type: ClusterIP
+  # The inference and /metrics port. Threaded through the container port, the
+  # Service, the probes, SGLang's --port flag and the preStop drain URL, so
+  # changing it here is enough. SGLang's own default is 30000.
+  port: 30000
+
+# Makes /health a plain status check (200 / 503-while-starting /
+# 503-while-draining) instead of a real inference request.
+#
+# SGLang ships SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION=true, which routes
+# /health through the SAME generate-a-token path as /health_generate. That
+# handler sleeps 1s before its first check and waits up to
+# SGLANG_HEALTH_CHECK_TIMEOUT (20s), so /health can never answer in under a
+# second -- against a probe timeoutSeconds that defaults to 1, it fails forever
+# with "context deadline exceeded".
+#
+# Set explicitly rather than relying on the image default, which has changed
+# between versions. /health_generate is unaffected and stays the deep check used
+# by livenessProbe below.
+healthEndpointGeneration: false
+
+# Probes. `port: http` refers to the container port by name, so it follows
+# service.port automatically.
+#
+# The startupProbe is what makes a livenessProbe safe here: until it succeeds
+# the kubelet does not run liveness or readiness at all, so loading a large
+# model cannot be mistaken for a hang and restarted. Its
+# failureThreshold x periodSeconds is the whole startup budget -- raise
+# failureThreshold for big models (a 30B+ model can need 10-20 minutes).
+#
+# Always set timeoutSeconds. It defaults to 1 second, which is too tight for a
+# server that is busy loading weights even when the endpoint itself is cheap.
+startupProbe:
+  httpGet:
+    path: /health
+    port: http
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 30
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+# Liveness uses the DEEP endpoint on purpose. /health only reports a status flag
+# and never touches the scheduler, so a wedged scheduler subprocess (CUDA hang,
+# NCCL deadlock -- the failure that actually needs a restart) would still answer
+# 200 and this probe would never fire. /health_generate submits a 1-token request
+# and returns as soon as ANY scheduler response is seen, so it stays cheap under
+# load and only really generates when the server is idle.
+#
+# timeoutSeconds MUST stay above SGLang's own HEALTH_CHECK_TIMEOUT (20s, env
+# SGLANG_HEALTH_CHECK_TIMEOUT). Below that the kubelet hangs up before SGLang
+# answers and counts a failure the server never had a chance to avoid.
+livenessProbe:
+  httpGet:
+    path: /health_generate
+    port: http
+  periodSeconds: 30
+  timeoutSeconds: 25
+  # 30s x 3 = 90s wedged before a restart.
+  failureThreshold: 3
+
+# Graceful shutdown: let a pod finish its work before it is deleted.
+#
+# SGLang differs from vLLM here in an important way. It ALREADY drains on
+# SIGTERM, with no flag to turn on: its sigterm handler sets gracefully_exit and
+# a watchdog waits for in-flight requests before shutting the schedulers down.
+# But that wait has NO timeout of its own -- it loops until the request count
+# reaches zero. terminationGracePeriodSeconds is therefore not a budget SGLang
+# stays inside, it is the deadline that CUTS SGLang off: whatever is still
+# running when it expires is SIGKILLed.
+#
+# So size the grace period past your longest generation, not just past the
+# numbers below.
+terminationGracePeriodSeconds: 60
+lifecycle:
+  preStop:
+    enabled: true
+    # Stage 1a: keep serving while the cluster takes this pod out of rotation,
+    # so no new requests are sent here.
+    #
+    # This always waits the full time. Kubernetes starts removing the pod from
+    # the EndpointSlice and runs this hook AT THE SAME TIME, not one after the
+    # other, and the pod has no way to check whether that removal finished yet.
+    #
+    # Set it to however long whatever routes traffic here needs to notice.
+    # Roughly ~1s for an in-cluster ClusterIP Service, ~10s if an external load
+    # balancer has to converge; 5 is a safe middle default.
+    endpointSyncSeconds: 5
+    # Stage 1b: how long to wait, at most, for requests already accepted to
+    # finish. The hook watches SGLang's own metrics and moves on as soon as the
+    # server goes idle, so a quiet pod shuts down in about endpointSyncSeconds
+    # instead of always waiting this long.
+    #
+    # Doing the draining HERE, where it is bounded, is what keeps the unbounded
+    # post-SIGTERM drain from running into the SIGKILL deadline.
+    drainSeconds: 30
+    # How often to re-check whether SGLang has gone idle.
+    pollIntervalSeconds: 2
+  # Stage 2: time reserved for SGLang's own shutdown after SIGTERM. There is no
+  # flag to set here -- this is just headroom we keep free in the grace period,
+  # and the chart checks it fits. It covers SGLang's fixed tail: the drain loop
+  # re-checks every 5s, then schedulers get up to 15s to exit before being
+  # killed. Anything still generating past this is cut off by the kubelet.
+  shutdownReserveSeconds: 20
+  # Sets SGL_FORCE_SHUTDOWN=1, which makes SGLang skip the drain and exit as
+  # soon as SIGTERM lands. Use it when you would rather drop in-flight requests
+  # than wait -- the preStop hook above still runs.
+  forceShutdown: false
+
+scaler:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 5
+  syncPeriodSeconds: 10
+  # Prometheus scrapes SGLang via the serviceMonitor below.
+  # Prometheus query endpoint (the /api/v1/query base). Adjust to your cluster;
+  # this is the headless Service the Prometheus Operator creates by default.
+  serverAddress: "http://prometheus-operated.monitoring.svc:9090"
+  # Optional HTTP headers for the metrics query (e.g. auth for a secured
+  # Prometheus). Empty for a typical in-cluster Prometheus.
+  serverHeaders: {}
+  # Each metric is a PromQL query (returning a single averaged value) plus a
+  # per-replica target. Scaling compares them as
+  # ceil(readyReplicas * value / target). Bake label filters into the query.
+  # The __SCOPE__ token expands to namespace="<ns>", app="<release>-sglang",
+  # scoping the query to THIS deployment's pods — important when several
+  # deployments (even same-named releases in different namespaces) serve the
+  # same model.
+  # A short avg_over_time window keeps the signal robust to a missed scrape and
+  # filters single-sample spikes; keep it short (~1m) so scale-up stays fast —
+  # scale-down conservatism belongs in scaleDown.stabilizationWindowSeconds.
+  metrics:
+    # Queue depth (requests waiting per replica). This is the signal that
+    # actually moves under real load on a small model — its KV cache barely
+    # fills, but requests queue once concurrency exceeds what SGLang can batch.
+    # Note the name differs from vLLM's: sglang:num_queue_reqs, not
+    # vllm:num_requests_waiting.
+    - name: queue-depth
+      query: 'avg(avg_over_time(sglang:num_queue_reqs{__SCOPE__}[1m]))'
+      target: "5"
+  # Cache-aware scale-down. deletionCostQuery is a PromQL instant query that
+  # returns one series per pod (carrying a "pod" label); its value becomes that
+  # pod's controller.kubernetes.io/pod-deletion-cost (lower = deleted first), so
+  # colder pods should yield lower numbers. Evaluated against serverAddress at
+  # scale-down time. Leave empty to use the built-in newest-pod-first heuristic.
+  # Keep empty when metricsMock is enabled (the mock has no per-pod "pod" label).
+  scaleDown:
+    behavior: CacheAware
+    # Hold at the highest recommendation over this window before scaling down, so
+    # a brief metric dip doesn't cause flapping (scale-up stays immediate).
+    # 0 disables it (keeps the metricsMock demo snappy); set e.g. 300 in prod.
+    stabilizationWindowSeconds: 0
+    # Cap on how many replicas one scale-down step removes, so the fleet walks
+    # down instead of bursting from N to minReplicas. 0 disables the cap (keeps
+    # the metricsMock demo snappy); set e.g. 1 in prod.
+    maxStepReplicas: 0
+    deletionCostQuery: ""
+    # Example (scoped to this deployment via __SCOPE__). SGLang's KV-cache
+    # equivalent of vllm:kv_cache_usage_perc is sglang:token_usage:
+    #   deletionCostQuery: 'sglang:token_usage{__SCOPE__} * 100'
+
+# Deterministic scale-op simulation. When enabled, the scaler queries this mock
+# instead of real Prometheus, so you can drive scaling by hand: set `value`
+# above the target (e.g. 10 vs target 5) to scale toward maxReplicas, below it
+# (e.g. 0) to scale toward minReplicas. Note: the value is static regardless
+# of replica count, so it pegs to the min/max bound rather than settling.
+metricsMock:
+  enabled: false
+  image: "hashicorp/http-echo:0.2.3"
+  # The value the mock returns for the metric query (compared against target).
+  value: "10"
+
+serviceMonitor:
+  # Requires the Prometheus Operator CRDs (monitoring.coreos.com) to be installed.
+  enabled: true
+  # SGLang exposes Prometheus metrics on the inference port at /metrics, but ONLY
+  # when started with --enable-metrics (the chart always passes it). Without that
+  # flag the route is not mounted at all and /metrics returns 404.
+  path: /metrics
+  interval: 15s
+  scrapeTimeout: 10s
+  # Extra labels so the cluster's Prometheus serviceMonitorSelector picks it up,
+  # e.g. { release: kube-prometheus-stack }
+  labels:
+    release: kube-prometheus-stack
+  # Pod labels copied onto the scraped series. `app` lets metric queries scope to
+  # a single deployment (app="<release>-sglang") when several serve the same model.
+  podTargetLabels:
+    - app
+
+# Additional environment variables on the SGLang container. Merged with
+# SGL_FORCE_SHUTDOWN when lifecycle.forceShutdown is on.
+env: []
+  # - name: HF_TOKEN
+  #   valueFrom:
+  #     secretKeyRef:
+  #       name: huggingface
+  #       key: token
+
+# Additional volumes on the output Deployment definition. The model volume built
+# from model.localPath is always mounted; these are added alongside it.
+volumes: []
+  # - name: shm
+  #   emptyDir:
+  #     medium: Memory
+  #     sizeLimit: 8Gi
+
+# Additional volumeMounts on the output Deployment definition.
+volumeMounts: []
+  # - name: shm
+  #   mountPath: /dev/shm
+
+# Pin the GPU pods to particular nodes. `affinity` is the place for node
+# affinity / anti-affinity rules; nodeSelector and tolerations are the simpler
+# forms of the same idea.
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

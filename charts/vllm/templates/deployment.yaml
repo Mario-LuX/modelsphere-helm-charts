@@ -1,0 +1,194 @@
+{{/*
+  Everything the shutdown does has to fit inside terminationGracePeriodSeconds.
+  That timer starts when the pod is marked Terminating and covers BOTH the
+  preStop hook and vLLM finishing up after SIGTERM. If the total is too big the
+  kubelet kills the pod while requests are still running, so fail here rather
+  than ship a config that quietly drops them.
+*/}}
+{{- $preStop := .Values.lifecycle.preStop }}
+{{- $budget := int .Values.lifecycle.shutdownTimeout }}
+{{- if $preStop.enabled }}
+{{- $budget = add $budget (int $preStop.endpointSyncSeconds) (int $preStop.drainSeconds) }}
+{{- end }}
+{{- if gt (int $budget) (int .Values.terminationGracePeriodSeconds) }}
+{{- fail (printf "vllm-mock: terminationGracePeriodSeconds (%d) is smaller than the shutdown budget (%d = preStop endpointSyncSeconds %d + drainSeconds %d + lifecycle.shutdownTimeout %d); the pod would be SIGKILLed mid-drain" (int .Values.terminationGracePeriodSeconds) (int $budget) (int $preStop.endpointSyncSeconds) (int $preStop.drainSeconds) (int .Values.lifecycle.shutdownTimeout)) }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-vllm
+  labels:
+    app: {{ .Release.Name }}-vllm
+spec:
+  {{- if not .Values.scaler.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- else }}
+  # replicas is deliberately ABSENT while the LLMScaler is enabled.
+  #
+  # The controller writes spec.replicas on this Deployment, which makes it the
+  # server-side-apply owner of that field (field manager "manager"). If the chart
+  # also declared it, every `helm upgrade` would try to take ownership back and
+  # fail with:
+  #   conflict with "manager" using apps/v1: .spec.replicas
+  # Leaving it out lets the operator own the field outright. The initial replica
+  # count then comes from scaler.minReplicas on the first reconcile, not from
+  # replicaCount.
+  {{- end }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-vllm
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-vllm
+    spec:
+      # Total time allowed to shut down. The preStop hook AND vLLM finishing up after SIGTERM both come out of this, or the pod gets killed.
+      # Checked at render time by the block at the top of this file.
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- if .Values.modelCheck.enabled }}
+      initContainers:
+      # Refuse to start the engine unless the mounted model directory actually
+      # holds a model. hostPathType above already rejects a missing path; this
+      # covers an empty or half-copied one. Reuses the engine image so no extra
+      # image has to be pulled, and takes no GPU.
+      - name: model-check
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        command:
+          - /bin/sh
+          - -c
+          - |
+            DIR={{ .Values.model.mountPath | quote }}
+            if [ ! -d "$DIR" ]; then
+              echo "model-check: $DIR is not a directory" >&2
+              exit 1
+            fi
+            if [ -z "$(ls -A "$DIR" 2>/dev/null)" ]; then
+              echo "model-check: $DIR is empty -- is {{ .Values.model.localPath }} populated on this node?" >&2
+              exit 1
+            fi
+            {{- range .Values.modelCheck.requiredGlobs }}
+            if [ -z "$(find "$DIR" -maxdepth 1 -name {{ . | quote }} -print -quit)" ]; then
+              echo "model-check: no {{ . }} directly under $DIR -- looks like an incomplete model" >&2
+              exit 1
+            fi
+            {{- end }}
+            echo "model-check: $DIR looks like a model directory"
+        volumeMounts:
+        - name: model-storage
+          mountPath: {{ .Values.model.mountPath }}
+          readOnly: true
+      {{- end }}
+      containers:
+      - name: vllm
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        command: ["python3", "-m", "vllm.entrypoints.openai.api_server"]
+        args:
+          - "--model={{ .Values.model.mountPath }}"
+          - "--served-model-name={{ .Values.model.name }}"
+          - "--host=0.0.0.0"
+          - "--port={{ .Values.service.port }}"
+          {{- with .Values.model.maxLen }}
+          # Left out when empty, so vLLM uses the model's own max length.
+          - "--max-model-len={{ . }}"
+          {{- end }}
+          {{- with .Values.extraArgs }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
+          {{- if gt (int .Values.lifecycle.shutdownTimeout) 0 }}
+          # Once SIGTERM arrives, give requests that are still running this long to finish instead of killing them (vLLM's default is 0 = kill).
+          # This catches anything that ran past the preStop hook below.
+          - "--shutdown-timeout={{ .Values.lifecycle.shutdownTimeout }}"
+          {{- end }}
+        {{- with .Values.env }}
+        env:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        ports:
+        - containerPort: {{ .Values.service.port }}
+          name: http
+        volumeMounts:
+        - name: model-storage
+          mountPath: {{ .Values.model.mountPath }}
+          readOnly: true
+        {{- with .Values.volumeMounts }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        resources:
+          limits:
+            nvidia.com/gpu: "{{ .Values.model.gpus }}"
+        {{- if $preStop.enabled }}
+        lifecycle:
+          preStop:
+            # Runs before SIGTERM, and its time counts against terminationGracePeriodSecond.
+            # Written in python3 because that is what the container already runs, so it is always there -- the vLLM image ships no curl or wget. Needs no external drain API.
+            exec:
+              command:
+                - python3
+                - -c
+                - |
+                  import time, urllib.request
+
+                  METRICS = "http://127.0.0.1:{{ .Values.service.port }}/metrics"
+                  # Gauges for what vLLM is serving right now and what it has queued.
+                  BUSY = ("vllm:num_requests_running", "vllm:num_requests_waiting")
+
+
+                  def inflight():
+                      """Requests still on this pod, or None if that is unknowable."""
+                      try:
+                          body = urllib.request.urlopen(METRICS, timeout=2).read().decode()
+                          return sum(
+                              float(line.rsplit(" ", 1)[1])
+                              for line in body.splitlines()
+                              if line.startswith(BUSY)
+                          )
+                      except Exception:
+                          return None
+
+
+                  # Keep serving while this pod is removed from the Service endpoints, so the router stops routing NEW requests here.
+                  time.sleep({{ $preStop.endpointSyncSeconds }})
+
+                  # Then wait for the requests we already accepted, stopping as soon as vLLM says it is idle.
+                  # If the check fails we get None, which is never == 0, so a broken or unreachable endpoint means we keep waiting instead of cutting requests off early.
+                  deadline = time.monotonic() + {{ $preStop.drainSeconds }}
+                  while time.monotonic() < deadline:
+                      if inflight() == 0:
+                          break
+                      time.sleep({{ $preStop.pollIntervalSeconds }})
+        {{- end }}
+        {{- with .Values.startupProbe }}
+        # While this is running the kubelet suppresses the other two probes, so a
+        # slow model load cannot trip a restart. Its
+        # failureThreshold x periodSeconds is the entire startup budget.
+        startupProbe:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.readinessProbe }}
+        readinessProbe:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.livenessProbe }}
+        livenessProbe:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      volumes:
+      - name: model-storage
+        hostPath:
+          path: {{ .Values.model.localPath }}
+          type: {{ .Values.model.hostPathType }}
+      {{- with .Values.volumes }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

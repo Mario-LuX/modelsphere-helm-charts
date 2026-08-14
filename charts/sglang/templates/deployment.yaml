@@ -1,0 +1,219 @@
+{{/*
+  Everything the shutdown does has to fit inside terminationGracePeriodSeconds.
+  That timer starts when the pod is marked Terminating and covers BOTH the
+  preStop hook and SGLang's own drain after SIGTERM. If the total is too big the
+  kubelet kills the pod while requests are still running, so fail here rather
+  than ship a config that quietly drops them.
+
+  Note this check is a FLOOR, not a guarantee: SGLang's post-SIGTERM drain has
+  no timeout of its own, so shutdownReserveSeconds only covers its fixed tail
+  (5s drain re-check + up to 15s for schedulers to exit). A generation longer
+  than the reserve is still cut off. Keep the real draining in drainSeconds,
+  where it is bounded and can end early.
+*/}}
+{{- $preStop := .Values.lifecycle.preStop }}
+{{- $budget := int .Values.lifecycle.shutdownReserveSeconds }}
+{{- if $preStop.enabled }}
+{{- $budget = add $budget (int $preStop.endpointSyncSeconds) (int $preStop.drainSeconds) }}
+{{- end }}
+{{- if gt (int $budget) (int .Values.terminationGracePeriodSeconds) }}
+{{- fail (printf "sglang-mock: terminationGracePeriodSeconds (%d) is smaller than the shutdown budget (%d = preStop endpointSyncSeconds %d + drainSeconds %d + lifecycle.shutdownReserveSeconds %d); the pod would be SIGKILLed mid-drain" (int .Values.terminationGracePeriodSeconds) (int $budget) (int $preStop.endpointSyncSeconds) (int $preStop.drainSeconds) (int .Values.lifecycle.shutdownReserveSeconds)) }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-sglang
+  labels:
+    app: {{ .Release.Name }}-sglang
+spec:
+  {{- if not .Values.scaler.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- else }}
+  # replicas is deliberately ABSENT while the LLMScaler is enabled.
+  #
+  # The controller writes spec.replicas on this Deployment, which makes it the
+  # server-side-apply owner of that field (field manager "manager"). If the chart
+  # also declared it, every `helm upgrade` would try to take ownership back and
+  # fail with:
+  #   conflict with "manager" using apps/v1: .spec.replicas
+  # Leaving it out lets the operator own the field outright. The initial replica
+  # count then comes from scaler.minReplicas on the first reconcile, not from
+  # replicaCount.
+  {{- end }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-sglang
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-sglang
+    spec:
+      # Total time allowed to shut down. The preStop hook AND SGLang draining after SIGTERM both come out of this, or the pod gets killed.
+      # Checked at render time by the block at the top of this file.
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- if .Values.modelCheck.enabled }}
+      initContainers:
+      # Refuse to start the engine unless the mounted model directory actually
+      # holds a model. hostPathType above already rejects a missing path; this
+      # covers an empty or half-copied one. Reuses the engine image so no extra
+      # image has to be pulled, and takes no GPU.
+      - name: model-check
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        command:
+          - /bin/sh
+          - -c
+          - |
+            DIR={{ .Values.model.mountPath | quote }}
+            if [ ! -d "$DIR" ]; then
+              echo "model-check: $DIR is not a directory" >&2
+              exit 1
+            fi
+            if [ -z "$(ls -A "$DIR" 2>/dev/null)" ]; then
+              echo "model-check: $DIR is empty -- is {{ .Values.model.localPath }} populated on this node?" >&2
+              exit 1
+            fi
+            {{- range .Values.modelCheck.requiredGlobs }}
+            if [ -z "$(find "$DIR" -maxdepth 1 -name {{ . | quote }} -print -quit)" ]; then
+              echo "model-check: no {{ . }} directly under $DIR -- looks like an incomplete model" >&2
+              exit 1
+            fi
+            {{- end }}
+            echo "model-check: $DIR looks like a model directory"
+        volumeMounts:
+        - name: model-storage
+          mountPath: {{ .Values.model.mountPath }}
+          readOnly: true
+      {{- end }}
+      containers:
+      - name: sglang
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        command: ["python3", "-m", "sglang.launch_server"]
+        args:
+          - "--model-path={{ .Values.model.mountPath }}"
+          - "--served-model-name={{ .Values.model.name }}"
+          - "--host=0.0.0.0"
+          - "--port={{ .Values.service.port }}"
+          {{- with .Values.model.contextLength }}
+          # Left out when empty, so SGLang uses the model's own context length.
+          - "--context-length={{ . }}"
+          {{- end }}
+          # Not optional for this chart. SGLang mounts /metrics only when this is set
+          # (it defaults to off), and without it both the LLMScaler queries and the
+          # preStop drain below have nothing to read. Do not repeat it in extraArgs.
+          - "--enable-metrics"
+          {{- with .Values.extraArgs }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
+        env:
+          # false makes /health a plain status check. Left at SGLang's own
+          # default (true) it runs a real 1-token generation, sleeps at least 1s
+          # and can take 20s, which no sane probe timeout survives.
+          - name: SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION
+            value: {{ .Values.healthEndpointGeneration | quote }}
+          {{- if .Values.lifecycle.forceShutdown }}
+          # Makes SGLang skip its drain and exit as soon as SIGTERM arrives.
+          - name: SGL_FORCE_SHUTDOWN
+            value: "1"
+          {{- end }}
+          {{- with .Values.env }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
+        ports:
+        - containerPort: {{ .Values.service.port }}
+          name: http
+        volumeMounts:
+        - name: model-storage
+          mountPath: {{ .Values.model.mountPath }}
+          readOnly: true
+        {{- with .Values.volumeMounts }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        resources:
+          limits:
+            nvidia.com/gpu: "{{ .Values.model.gpus }}"
+        {{- if $preStop.enabled }}
+        lifecycle:
+          preStop:
+            # Runs before SIGTERM, and its time counts against terminationGracePeriodSeconds.
+            # Written in python3 because that is what the container already runs, so it is always there -- the SGLang image ships no curl or wget. Needs no external drain API.
+            exec:
+              command:
+                - python3
+                - -c
+                - |
+                  import time, urllib.request
+
+                  METRICS = "http://127.0.0.1:{{ .Values.service.port }}/metrics"
+                  # What SGLang is working on right now, plus what is queued up.
+                  # These names are SGLang's own -- vLLM calls them
+                  # vllm:num_requests_running / vllm:num_requests_waiting.
+                  BUSY = ("sglang:num_running_reqs", "sglang:num_queue_reqs")
+
+
+                  def inflight():
+                      """Requests still on this pod, or None if we cannot tell."""
+                      try:
+                          body = urllib.request.urlopen(METRICS, timeout=2).read().decode()
+                      except Exception:
+                          return None
+                      total, found = 0.0, False
+                      for line in body.splitlines():
+                          if line.startswith(BUSY):
+                              try:
+                                  total += float(line.rsplit(" ", 1)[1])
+                              except (IndexError, ValueError):
+                                  return None
+                              found = True
+                      # No matching series at all means the metrics we rely on are
+                      # missing (--enable-metrics dropped, or renamed upstream). Report
+                      # "cannot tell" rather than "idle", so a broken assumption makes
+                      # the drain wait instead of silently skipping.
+                      return total if found else None
+
+
+                  # Keep serving while the cluster takes this pod out of rotation, so no new requests are sent here.
+                  time.sleep({{ $preStop.endpointSyncSeconds }})
+
+                  # Then wait for the requests we already accepted, stopping as soon as SGLang says it is idle.
+                  # Anything we cannot read comes back as None, which is never == 0, so we keep waiting instead of cutting requests off early.
+                  deadline = time.monotonic() + {{ $preStop.drainSeconds }}
+                  while time.monotonic() < deadline:
+                      if inflight() == 0:
+                          break
+                      time.sleep({{ $preStop.pollIntervalSeconds }})
+        {{- end }}
+        {{- with .Values.startupProbe }}
+        # While this is running the kubelet suppresses the other two probes, so a
+        # slow model load cannot trip a restart. Its
+        # failureThreshold x periodSeconds is the entire startup budget.
+        startupProbe:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.readinessProbe }}
+        readinessProbe:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.livenessProbe }}
+        livenessProbe:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      volumes:
+      - name: model-storage
+        hostPath:
+          path: {{ .Values.model.localPath }}
+          type: {{ .Values.model.hostPathType }}
+      {{- with .Values.volumes }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

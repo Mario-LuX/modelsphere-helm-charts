@@ -1,0 +1,232 @@
+# A example values setup for fallback modelforge.
+# Consult real GitOps repo for deploy values
+
+replicaCount: 1
+
+image:
+  # harbor.4pd.io/hardcore-tech/sglang:v0.5.15-cu129
+  repository: "harbor.4pd.io/hardcore-tech/sglang"
+  tag: "v0.5.15-cu129"
+
+model:
+  # --served-model-name kimi-k2.6
+  name: "kimi-k2.6"
+  # -v /mnt/disk0/models/modelforge/Qwen3.6-35B-A3B-793303:/model
+  # The chart mounts this itself and passes --model-path, so only the host path
+  # is needed. (The chart mounts at /data/models, not /model -- the container
+  # path is an internal detail and nothing else references it.)
+  localPath: "/mnt/disk0/models/modelforge/Qwen3.6-35B-A3B-793303"
+  # --gpus all with CUDA_VISIBLE_DEVICES=0,1, i.e. two GPUs, matching --tp-size 2.
+  gpus: "2"
+  # The script never passed --context-length, so leave it off and let SGLang use
+  # the model's own. Setting a number here would silently cap a 35B model.
+  contextLength: ""
+
+# Assert both halves of the checkpoint, not just the metadata.
+#
+# config.json is safe to require: the script looks one level deep, and SGLang
+# passes --model-path straight to a HF loader, which itself needs config.json at
+# that top level. If it were not there this deployment could never have worked.
+#
+# But config.json ALONE would be a near-useless completeness check. In a partial
+# rsync/scp the small JSON files land first and the multi-GB weight shards are
+# precisely what is missing or truncated -- so the weights glob is the one that
+# actually catches a half-synced model. A 35B checkpoint is sharded, and
+# "*.safetensors" matches model-00001-of-000NN.safetensors.
+#
+# If this checkpoint stores weights as .bin rather than .safetensors, change the
+# second glob -- entries are ANDed, so a wrong one blocks startup entirely.
+# Confirm with:  ls /mnt/disk0/models/modelforge/Qwen3.6-35B-A3B-793303
+modelCheck:
+  enabled: true
+  requiredGlobs:
+    - "config.json"
+    - "*.safetensors"
+
+service:
+  type: ClusterIP
+  # --port 8050
+  port: 8050
+
+# The chart's defaults are sized for opt-125m. A 35B MoE with --tp-size 2 has to
+# load weights across two GPUs and capture CUDA graphs before it answers, which
+# is minutes, not seconds.
+#
+# The startupProbe is the important one: while it is running the kubelet does not
+# run liveness or readiness at all, so a long load cannot be mistaken for a hang.
+# 15s x 80 = 20 minutes of budget. It costs nothing when startup is quick -- the
+# probe simply succeeds early -- so err high rather than risk a restart loop that
+# never lets the model finish loading.
+# timeoutSeconds is NOT optional here. It defaults to 1s, and this node is busy
+# loading 35B of weights across two GPUs while the probe runs -- 1s is not enough
+# even for a cheap endpoint. (The chart also sets
+# SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION=false so /health is not a real
+# inference request; without that no timeout below 20s would ever pass.)
+startupProbe:
+  httpGet:
+    path: /health
+    port: http
+  periodSeconds: 15
+  timeoutSeconds: 10
+  failureThreshold: 80
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Deep endpoint on purpose: /health only reports a status flag and would keep
+# answering 200 with a wedged scheduler. /health_generate proves the scheduler
+# still round-trips, and short-circuits on any scheduler activity so it costs
+# nothing while the server is busy.
+#
+# timeoutSeconds must stay above SGLang's HEALTH_CHECK_TIMEOUT (20s). Slack on
+# failureThreshold because a restart costs another full 20-minute load:
+# 60s x 4 = 4 minutes wedged before we give up on it.
+livenessProbe:
+  httpGet:
+    path: /health_generate
+    port: http
+  periodSeconds: 60
+  timeoutSeconds: 25
+  failureThreshold: 4
+
+# Everything from the script's command line that the chart does not already
+# emit. --model-path, --served-model-name, --host, --port and --enable-metrics
+# are added by the chart itself, so they are intentionally absent here.
+extraArgs:
+  - "--tp-size=2"
+  - "--mamba-radix-cache-strategy=extra_buffer"
+  - "--chunked-prefill-size=16384"
+  - "--mem-fraction-static=0.83"
+  - "--enable-cache-report"
+  - "--stream-response-default-include-usage"
+  - "--reasoning-parser=qwen3"
+  - "--tool-call-parser=qwen3_coder"
+
+env:
+  # -e NVIDIA_DISABLE_REQUIRE=1
+  - name: NVIDIA_DISABLE_REQUIRE
+    value: "1"
+  # -e PYTORCH_ALLOC_CONF=expandable_segments:True
+  - name: PYTORCH_ALLOC_CONF
+    value: "expandable_segments:True"
+  # CUDA_VISIBLE_DEVICES=0,1 is deliberately NOT carried over. On Kubernetes the
+  # NVIDIA device plugin sets it from the nvidia.com/gpu limit above; pinning it
+  # by hand fights the allocator and can point the process at GPUs this pod was
+  # not granted.
+
+volumes:
+  # -v /root/deploy/modelforge-0.1-p8050/.cache:/root/.cache
+  # hostPath keeps the script's behaviour (a per-node cache). A PVC would be the
+  # better choice if these pods can move between nodes.
+  - name: dot-cache
+    hostPath:
+      path: /root/deploy/modelforge-0.1-p8050/.cache
+      type: DirectoryOrCreate
+  # Stand-in for --ipc=host: torch's TP workers need a large shared-memory
+  # segment. This gives them one without putting the pod in the host IPC
+  # namespace. See the note below.
+  - name: dshm
+    emptyDir:
+      medium: Memory
+      sizeLimit: 16Gi
+
+volumeMounts:
+  - name: dot-cache
+    mountPath: /root/.cache
+  - name: dshm
+    mountPath: /dev/shm
+
+# The script ran on one fixed host. On a cluster, steer the pod to nodes that
+# actually have two matching GPUs.
+nodeSelector: {}
+tolerations: []
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: nvidia.com/gpu.product
+          operator: In
+          values:
+          - "NVIDIA-H100-80GB-HBM3"
+        - key: nvidia.com/cuda.driver-version.full
+          operator: In
+          values:
+          - "575.57.08"
+
+# Graceful shutdown, sized for this model rather than the chart's opt-125m
+# defaults. A 35B model answering long prompts can generate for minutes, and
+# SGLang's post-SIGTERM drain has no timeout of its own, so
+# terminationGracePeriodSeconds is what ultimately cuts it off.
+terminationGracePeriodSeconds: 3600
+lifecycle:
+  preStop:
+    enabled: true
+    endpointSyncSeconds: 5
+    # Bounded draining happens here, where the hook can exit early once the
+    # server reports idle. 5 + 600 + 20 = 625, inside the 3600 above.
+    drainSeconds: 600
+    pollIntervalSeconds: 5
+  shutdownReserveSeconds: 20
+  forceShutdown: false
+
+# The chart always ships an LLMScaler. Bounds are conservative on purpose: each
+# replica claims 2 GPUs, so maxReplicas: 2 is already 4 GPUs. Set
+# scaler.enabled: false to deploy this as a plain fixed Deployment like the
+# script did.
+scaler:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 8
+  syncPeriodSeconds: 10
+  serverAddress: "http://prometheus-operated.monitoring.svc:9090"
+  metrics:
+    - name: queue-depth
+      query: 'avg(avg_over_time(sglang:num_queue_reqs{__SCOPE__}[1m]))'
+      target: "5"
+  scaleDown:
+    behavior: CacheAware
+    # A cold start on a 35B model is expensive, so do not shrink on a brief dip.
+    stabilizationWindowSeconds: 300
+    # ...and give up at most one warm replica per sync period once we do shrink.
+    maxStepReplicas: 2
+    deletionCostQuery: 'sglang:token_usage{__SCOPE__} * 100'
+
+serviceMonitor:
+  enabled: true
+  path: /metrics
+  interval: 15s
+  scrapeTimeout: 10s
+  labels:
+    release: kube-prometheus-stack
+  podTargetLabels:
+    - app
+
+# ---------------------------------------------------------------------------
+# Not portable from `docker run`, listed so their absence is a decision:
+#
+#   --network host   Not needed. The Service publishes port 8050; hostNetwork
+#                    would only be required to bypass it, and it breaks the
+#                    per-pod IP that EndpointSlice-based draining relies on.
+#
+#   --ipc=host       Approximated by the /dev/shm emptyDir above. True host IPC
+#                    needs `hostIPC: true` in the pod spec, which this chart does
+#                    not expose; the shared-memory size is the part that matters
+#                    for torch. Raise sizeLimit if TP workers hit shm errors.
+#
+#   --ulimit memlock=-1
+#   --ulimit stack=67108864
+#                    A Pod spec has no ulimit field. These are set on the
+#                    container runtime / kubelet (e.g. containerd's
+#                    default_ulimits), not per workload.
+#
+# Also note the entrypoint differs in form only: the script runs `sglang serve`,
+# the chart runs `python3 -m sglang.launch_server`. Both exist in v0.5.15 and
+# start the same server; the chart uses the module form because it is the
+# long-stable one.
+# ---------------------------------------------------------------------------
