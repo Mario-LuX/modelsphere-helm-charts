@@ -1,0 +1,9 @@
+apiVersion: v2
+name: rdma-injector
+description: >-
+  rdma-injector mutating admission webhook —— 给带 label rdma-ib:"true" 的 pod 自动注入
+  /etc/gpu-node 挂载 + 启动时 source NCCL_IB_HCA(本机好 IB 口),业务 manifest 零 RDMA 样板。
+  代码烤进镜像;serving 证书由 helm 在 install 时自签(可装到任意 namespace)。
+type: application
+version: 0.2.0
+appVersion: "0.2.0"

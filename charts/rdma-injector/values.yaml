@@ -1,0 +1,26 @@
+# 证书由 Helm 在 install 时自签(SAN=rdma-injector.<Release.Namespace>.svc)→ 可装到任意 ns。
+# 装哪个 ns 由 `helm install ... -n <ns>` 决定,这里不写死。
+
+image:
+  repository: harbor.4pd.io/hardcore-tech/rdma-injector
+  tag: "0.2.0"                    # 只烤代码、不烤证书的镜像
+  pullPolicy: IfNotPresent
+
+# failurePolicy=Fail 下是关键路径,多副本防单点(webhook 自身不带 rdma-ib label + 排除自己 ns → 无自锁)
+replicas: 2
+
+# 只拦带这些 label 的 pod(谁要 RDMA 谁打;与模型无关)
+objectSelectorLabels:
+  rdma-ib: "true"
+
+# webhook 挂了是否拒绝带 label 的 pod 创建:
+#   Fail   = fail-closed(宁可清晰报错不启动,也不静默起个没注入 RDMA 的坏 pod)—— 推荐
+#   Ignore = fail-open(webhook 挂了照常放行,但 pod 不会被注入)
+failurePolicy: Fail
+
+# 自签证书有效期(天)。首次 install 签一次;之后 upgrade 用 lookup 复用已有 Secret,不重签。
+certValidityDays: 3650
+
+resources:
+  requests: { cpu: "50m", memory: "32Mi" }
+  limits:   { cpu: "200m", memory: "128Mi" }

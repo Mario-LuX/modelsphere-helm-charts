@@ -1,0 +1,62 @@
+{{/*
+  serving 证书:首次 install 用 genSignedCert 自签(SAN=rdma-injector.<ns>.svc);
+  之后 upgrade 用 lookup 复用已有 Secret 的证书,不重签(避免 churn)。
+  ⚠️ lookup 在 `helm template`/`--dry-run` 下返回空 → 那种纯渲染会临时生成一张丢弃证书,不影响真实 apply。
+*/}}
+{{- $ns := .Release.Namespace -}}
+{{- $svc := "rdma-injector" -}}
+{{- $secretName := "rdma-injector-certs" -}}
+{{- $cn := printf "%s.%s.svc" $svc $ns -}}
+{{- $altNames := list $cn (printf "%s.%s.svc.cluster.local" $svc $ns) -}}
+{{- $days := int .Values.certValidityDays -}}
+{{- $prev := lookup "v1" "Secret" $ns $secretName -}}
+{{- $data := dict -}}
+{{- if $prev }}{{- $data = ($prev.data | default dict) }}{{- end -}}
+{{- $caCrt := "" -}}{{- $tlsCrt := "" -}}{{- $tlsKey := "" -}}
+{{- if hasKey $data "ca.crt" -}}
+  {{- $caCrt = index $data "ca.crt" -}}
+  {{- $tlsCrt = index $data "tls.crt" -}}
+  {{- $tlsKey = index $data "tls.key" -}}
+{{- else -}}
+  {{- $ca := genCA "rdma-injector-ca" $days -}}
+  {{- $cert := genSignedCert $cn nil $altNames $days $ca -}}
+  {{- $caCrt = $ca.Cert | b64enc -}}
+  {{- $tlsCrt = $cert.Cert | b64enc -}}
+  {{- $tlsKey = $cert.Key | b64enc -}}
+{{- end -}}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  namespace: {{ $ns }}
+  labels: { app: rdma-injector }
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $tlsCrt }}
+  tls.key: {{ $tlsKey }}
+  ca.crt: {{ $caCrt }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata: { name: rdma-injector }
+webhooks:
+- name: rdma-injector.{{ $ns }}.svc
+  clientConfig:
+    service: { name: {{ $svc }}, namespace: {{ $ns }}, path: /mutate, port: 443 }
+    caBundle: {{ $caCrt }}                          # 与上面 Secret 里的 serving 证书配套(同一张 CA)
+  rules:
+  - operations: ["CREATE"]
+    apiGroups: [""]
+    apiVersions: ["v1"]
+    resources: ["pods"]
+    scope: "Namespaced"
+  objectSelector:                                   # 只拦带此 label 的 pod —— 谁要 RDMA 谁打
+    matchLabels: {{ toYaml .Values.objectSelectorLabels | nindent 6 }}
+  namespaceSelector:                                # 双保险:永不碰 webhook 自己所在 ns
+    matchExpressions:
+    - { key: kubernetes.io/metadata.name, operator: NotIn, values: [{{ $ns | quote }}] }
+  failurePolicy: {{ .Values.failurePolicy }}
+  sideEffects: None
+  admissionReviewVersions: ["v1"]
+  timeoutSeconds: 5

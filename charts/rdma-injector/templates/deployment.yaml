@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rdma-injector
+  namespace: {{ .Release.Namespace }}
+  labels: { app: rdma-injector }
+spec:
+  replicas: {{ .Values.replicas }}
+  selector: { matchLabels: { app: rdma-injector } }
+  template:
+    metadata: { labels: { app: rdma-injector } }
+    spec:
+      tolerations:                                  # 允许落到 control-plane 节点
+      - { operator: Exists }
+      affinity:                                     # 尽量把副本分到不同节点
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector: { matchLabels: { app: rdma-injector } }
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - name: webhook
+        # 代码烤在镜像里;serving 证书由 helm 自签 → Secret 挂到 /tls
+        image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports: [{ containerPort: 8443 }]
+        readinessProbe:
+          httpGet: { path: /healthz, port: 8443, scheme: HTTPS }
+          initialDelaySeconds: 2
+        resources: {{ toYaml .Values.resources | nindent 10 }}
+        volumeMounts:
+        - { name: tls, mountPath: /tls, readOnly: true }
+      volumes:
+      - name: tls
+        secret: { secretName: rdma-injector-certs }

@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: rdma-injector
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector: { app: rdma-injector }
+  ports: [{ port: 443, targetPort: 8443 }]
