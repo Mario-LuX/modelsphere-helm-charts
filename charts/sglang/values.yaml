@@ -242,6 +242,127 @@ serviceMonitor:
   podTargetLabels:
     - app
 
+# Publish this deployment to autoconfig as a ModelRoute
+# (routing.gpucluster.io/v1alpha1), so openresty's peers and the CART workers
+# follow the pods instead of being maintained by hand.
+#
+# Requires the ModelRoute CRD, which ships with the autoconfig chart. With it
+# absent, enabling this fails the install with "no matches for kind ModelRoute"
+# -- the chart does not carry a copy, because the operator owns that schema.
+#
+# LLMScaler and ModelRoute are complementary and independent: the scaler decides
+# how many replicas there are, and autoconfig keeps the routes matching whatever
+# it decides. Neither needs the other.
+modelRoute:
+  enabled: false
+  # ModelRoute name; also the default openresty route (external path
+  # 8080/<name>/) and the default monitor model name. Defaults to the release
+  # name.
+  #
+  # The CR is always created in the release namespace, alongside the Deployment,
+  # so it is installed and removed with the rest of the release. Autoconfig
+  # watches cluster-wide and every reference below is fully qualified
+  # ("ns/name"), so openresty, CART and monitor can still live elsewhere.
+  name: ""
+  annotations: {}
+
+  # The backend bucket that feeds CART's workers, nginx's backend peers and
+  # monitor's service rows.
+  #
+  # Which backends those are is NOT configurable: it is always this release's own
+  # Service on service.port. Routing from the chart that owns the Deployment is
+  # the point -- the two cannot drift, and a scale event is all it takes for
+  # every route to follow. To route to something else, write a ModelRoute for it
+  # there, or by hand.
+  discovery:
+    # Ready endpoints only, by default. Endpoints being drained are excluded
+    # either way.
+    includeNotReady: false
+
+  # The openresty (nginx) route. This is the only required section.
+  nginx:
+    # Defaults to the ModelRoute name above. It becomes the conf file name, the
+    # openresty dict name, the unix socket name and the external path key, so it
+    # must be [a-z0-9._-] only.
+    route: ""
+    # REQUIRED: the ConfigMap autoconfig writes the route into ("ns/name"),
+    # shared by every model on one openresty with a key per route. There is no
+    # default the chart could guess -- e.g. llm-route/openresty-conf.
+    outputConfigMap: ""
+    # Optional openresty entrypoint Service ("ns/name"). Feeds monitor's nginx
+    # row and makes entrypoint scaling event-driven. Falls back to selector when
+    # empty; service wins when both are set.
+    service: ""
+    selector: ""
+    # Arbitrary tuning knobs, rendered verbatim into openresty's lua route table
+    # (so a new knob needs no chart change). Common ones: ttft_limit_ms,
+    # tps_limit_tps, adaptive_cc_min, default_max.
+    values: {}
+      # Setting tps_limit_tps opts into adaptive concurrency (AIMD): when the
+      # decode rate falls below this, the concurrency ceiling shrinks.
+      # tps_limit_tps: "30"
+      # Concurrency for any peer with no maxConcurrency of its own.
+      # default_max: "120"
+    # Ordered peer groups, highest priority first. Traffic only cascades to a
+    # lower tier once every peer above it is banned.
+    #
+    # The default is the two tiers that need nothing outside this chart: direct
+    # pod IPs, then the Service ClusterIP underneath. That bottom tier is a
+    # static safety net -- if autoconfig is down during a rollout, every pod IP
+    # it knows can be stale at once, and the ClusterIP still resolves because
+    # kube-proxy maintains it.
+    peers:
+      - use: backend
+        priority: 2
+        maxConcurrency: 100
+      - use: backend-svc
+        priority: 1
+      # Add CART on top (needs cart.enabled below). maxConcurrencyFromBackend
+      # sizes its limit dynamically as (backend maxConcurrency x backend count),
+      # so it tracks scaling instead of being pinned to a stale number.
+      # - use: cart
+      #   priority: 3
+      #   maxConcurrencyFromBackend: true
+
+  # Cache-aware router (CART) in front of the backends. Off means nginx talks to
+  # them directly. A CART instance belongs to exactly one model -- prefix
+  # affinity only means anything within a single model -- so never point two
+  # ModelRoutes at one CART.
+  cart:
+    enabled: false
+    # REQUIRED when enabled: this model's own CART Service ("ns/name").
+    # Preferred over selector because nginx then reaches CART through a
+    # ClusterIP, which keeps CART failovers and rollouts invisible to openresty.
+    service: ""
+    selector: ""
+    # Omit to let autoconfig derive it from the Service (single-port only).
+    port: ""
+    # REQUIRED when enabled: the CART's own config ConfigMap ("ns/name") -- the
+    # cache_aware_router chart's <fullname>-config. Autoconfig rewrites only its
+    # workers section; the rest stays as that chart wrote it.
+    outputConfigMap: ""
+    # Per-worker max_load.
+    maxLoad: 20
+
+  # Write these backends into monitor's config as well. Monitor reloads it every
+  # 60s on its own, so no sidecar is involved.
+  monitor:
+    enabled: false
+    # REQUIRED when enabled: monitor's ConfigMap ("ns/name"), shared across
+    # models with one key per model.
+    outputConfigMap: ""
+    # Defaults to model.name (what the chart passes to --served-model-name).
+    model: ""
+    # Empty means autoconfig derives it from the node's GPU label
+    # (nvidia.com/gpu.product, set by GFD). Set it only to override that, or
+    # where no such label exists.
+    gpuType: ""
+    # Monitor's nginx and router rows, both on by default when the sections they
+    # reuse are configured (nginx.service and cart respectively). Set to false
+    # to turn one off; null leaves autoconfig's default in place.
+    nginx: null
+    router: null
+
 # Additional environment variables on the SGLang container. Merged with
 # SGL_FORCE_SHUTDOWN when lifecycle.forceShutdown is on.
 env: []

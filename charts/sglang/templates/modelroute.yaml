@@ -1,0 +1,153 @@
+{{- if .Values.modelRoute.enabled -}}
+{{/*
+  ModelRoute (routing.gpucluster.io/v1alpha1) -- hands this deployment's pods to
+  autoconfig, which keeps openresty's peers and the CART workers in sync as
+  replicas come and go. Requires the CRD from the autoconfig chart; without it
+  `helm install` fails with "no matches for kind ModelRoute".
+
+  The CR lands in the release namespace, next to the Deployment it describes, so
+  it comes and goes with the rest of the release.
+
+  Discovery is not configurable: it is always this release's own Service on
+  service.port, written fully qualified ("<ns>/<name>") to match the
+  cross-namespace references below. That is the whole point of routing from the
+  chart that owns the Deployment -- the two cannot drift, and no one has to
+  restate a name the chart already knows.
+
+  monitor.model is derived the same way, from model.name -- the value the chart
+  passes to --served-model-name, which is the string monitor matches on.
+
+  The CRD carries CEL rules that reject a contradictory spec, but they name CR
+  fields (spec.cart, nginx.peers) rather than the values keys below, and they
+  only fire once the manifest reaches the API server. The block below checks the
+  same things at render time and points at the values key to fix.
+*/}}
+{{- $mr := .Values.modelRoute }}
+{{- $ownSvc := printf "%s/%s-sglang-svc" .Release.Namespace .Release.Name }}
+
+{{- /* Scan the peer list once: which tiers are in play, and what the backend
+       tier's per-instance concurrency is (the multiplier for a cart peer's
+       maxConcurrencyFromBackend). */}}
+{{- $usesCart := false }}
+{{- $ccFromBackend := false }}
+{{- $backendCC := 0 }}
+{{- range $mr.nginx.peers }}
+  {{- if eq (.use | toString) "cart" }}
+    {{- $usesCart = true }}
+    {{- if .maxConcurrencyFromBackend }}{{ $ccFromBackend = true }}{{ end }}
+  {{- else if eq (.use | toString) "backend" }}
+    {{- $backendCC = max $backendCC (.maxConcurrency | default 0 | int) }}
+  {{- end }}
+{{- end }}
+
+{{- if not $mr.nginx.outputConfigMap }}
+{{- fail "sglang-mock: modelRoute.nginx.outputConfigMap is required -- it names the ConfigMap autoconfig writes this route into (\"ns/name\", e.g. llm-route/openresty-conf). The chart cannot guess where your openresty lives" }}
+{{- end }}
+{{- if not $mr.nginx.peers }}
+{{- fail "sglang-mock: modelRoute.nginx.peers must hold at least one peer group (the CRD requires minItems: 1); the simplest is a single `- use: backend`" }}
+{{- end }}
+{{- if and $usesCart (not $mr.cart.enabled) }}
+{{- fail "sglang-mock: modelRoute.nginx.peers routes to `use: cart`, but modelRoute.cart.enabled is false, so the rendered spec would have no cart block for that peer to point at -- enable modelRoute.cart or drop the cart peer" }}
+{{- end }}
+{{- if and $ccFromBackend (le (int $backendCC) 0) }}
+{{- fail "sglang-mock: modelRoute.nginx.peers has a cart peer with maxConcurrencyFromBackend, which sizes CART's limit as (per-backend concurrency x backend count) -- that needs a `use: backend` peer carrying maxConcurrency > 0 as the multiplier. Add one, or drop maxConcurrencyFromBackend and set a static maxConcurrency on the cart peer" }}
+{{- end }}
+{{- if $mr.cart.enabled }}
+  {{- if not $mr.cart.outputConfigMap }}
+  {{- fail "sglang-mock: modelRoute.cart.outputConfigMap is required when modelRoute.cart.enabled -- it is the CART's own config ConfigMap (\"ns/name\", the cache_aware_router chart's <fullname>-config), whose workers section autoconfig refills" }}
+  {{- end }}
+  {{- if and $mr.cart.service $mr.cart.selector }}
+  {{- fail "sglang-mock: modelRoute.cart.service and modelRoute.cart.selector are mutually exclusive -- set exactly one" }}
+  {{- end }}
+  {{- if not (or $mr.cart.service $mr.cart.selector) }}
+  {{- fail "sglang-mock: modelRoute.cart needs a service or a selector to find the CART pods. Prefer service (\"ns/name\"): nginx then reaches CART through its ClusterIP, so a CART failover or rollout stays invisible to openresty. Note CART is per-model, never shared" }}
+  {{- end }}
+{{- end }}
+{{- if and $mr.monitor.enabled (not $mr.monitor.outputConfigMap) }}
+{{- fail "sglang-mock: modelRoute.monitor.outputConfigMap is required when modelRoute.monitor.enabled -- it is the ConfigMap monitor reads (\"ns/name\", shared across models, one key per model)" }}
+{{- end }}
+apiVersion: routing.gpucluster.io/v1alpha1
+kind: ModelRoute
+metadata:
+  name: {{ $mr.name | default .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Release.Name }}-sglang
+  {{- with $mr.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  # The backend bucket: what feeds CART's workers, nginx's backend peers and
+  # monitor's service rows. Always this release's own Service, so a scale event
+  # is all it takes for every route to follow.
+  discovery:
+    service: {{ $ownSvc | quote }}
+    # Emitted rather than left to autoconfig's auto-derivation: the chart already
+    # knows the port, and a fixed value keeps working if a second port is ever
+    # added to the Service (auto-derivation only handles the single-port case).
+    port: {{ .Values.service.port }}
+    {{- if $mr.discovery.includeNotReady }}
+    includeNotReady: true
+    {{- end }}
+  {{- if $mr.cart.enabled }}
+  # Cache-aware router for THIS model. CART is per-model by nature -- prefix
+  # affinity is only meaningful within one model -- so never point two
+  # ModelRoutes at the same one.
+  cart:
+    {{- if $mr.cart.selector }}
+    selector: {{ $mr.cart.selector | quote }}
+    {{- else }}
+    service: {{ $mr.cart.service | quote }}
+    {{- end }}
+    {{- with $mr.cart.port }}
+    port: {{ . }}
+    {{- end }}
+    outputConfigMap: {{ $mr.cart.outputConfigMap | quote }}
+    {{- with $mr.cart.maxLoad }}
+    maxLoad: {{ . }}
+    {{- end }}
+  {{- end }}
+  nginx:
+    {{- with $mr.nginx.route }}
+    route: {{ . | quote }}
+    {{- else }}
+    # route omitted: autoconfig derives it from metadata.name above. That name is
+    # already an RFC 1123 name, so it always satisfies the route charset
+    # ([a-z0-9._-]) that dispatch's path regex depends on.
+    {{- end }}
+    outputConfigMap: {{ $mr.nginx.outputConfigMap | quote }}
+    {{- if $mr.nginx.service }}
+    service: {{ $mr.nginx.service | quote }}
+    {{- else if $mr.nginx.selector }}
+    selector: {{ $mr.nginx.selector | quote }}
+    {{- end }}
+    {{- with $mr.nginx.values }}
+    # Rendered verbatim into openresty's lua route table, so new tuning knobs
+    # need no chart change. Quoted because the CRD types them as strings.
+    values:
+      {{- range $k, $v := . }}
+      {{ $k }}: {{ $v | quote }}
+      {{- end }}
+    {{- end }}
+    # Ordered peer groups; higher priority wins, and traffic only cascades to a
+    # lower tier once every peer above it is banned.
+    peers:
+      {{- toYaml $mr.nginx.peers | nindent 6 }}
+  {{- if $mr.monitor.enabled }}
+  monitor:
+    outputConfigMap: {{ $mr.monitor.outputConfigMap | quote }}
+    # Defaults to model.name, which is exactly what the chart passes to
+    # --served-model-name -- monitor matches on that string, so the two must agree.
+    model: {{ $mr.monitor.model | default .Values.model.name | quote }}
+    {{- with $mr.monitor.gpuType }}
+    gpuType: {{ . | quote }}
+    {{- end }}
+    {{- if kindIs "bool" $mr.monitor.nginx }}
+    nginx: {{ $mr.monitor.nginx }}
+    {{- end }}
+    {{- if kindIs "bool" $mr.monitor.router }}
+    router: {{ $mr.monitor.router }}
+    {{- end }}
+  {{- end }}
+{{- end -}}
