@@ -150,7 +150,7 @@ lifecycle:
 scaler:
   enabled: true
   minReplicas: 1
-  maxReplicas: 8
+  maxReplicas: 3
   syncPeriodSeconds: 10
   metricProvider: Custom
   serverAddress: "http://decision-gen.llm-scaler.svc:80"
