@@ -1,52 +1,125 @@
 {{- if .Values.scaler.enabled -}}
+{{/*
+  LLMScaler (autoscaling.4pd.io/v1alpha1). The CRD offers two mutually exclusive
+  signal sources, and metricProvider picks which:
+
+    Prometheus (default) -- spec.metrics are PromQL queries evaluated against
+      spec.serverAddress, and replicas come out of
+      ceil(readyReplicas * value / target).
+    Custom -- spec.metrics is not read at all. spec.serverAddress is a decision
+      server, and the scaler reads a replica count straight off it.
+
+  They are alternatives, not layers: there is no fallback from one to the other,
+  so a misconfigured provider means no scaling rather than degraded scaling.
+
+  The CRD carries CEL rules for both (metrics non-empty unless Custom;
+  customProvider present when Custom), but they only fire once the manifest
+  reaches the API server, and they name CR fields rather than the values keys
+  below. The block that follows checks the same things at render time and points
+  at the key to fix.
+*/}}
+{{- $s := .Values.scaler }}
+{{- $provider := $s.metricProvider | default "Prometheus" }}
+{{- $cp := $s.customProvider | default dict }}
+{{- $custom := eq $provider "Custom" }}
+
+{{- if not (has $provider (list "Prometheus" "Custom")) }}
+{{- fail (printf "vllm: scaler.metricProvider must be \"Prometheus\" or \"Custom\", got %q -- the CRD enum rejects anything else" $provider) }}
+{{- end }}
+{{- if $custom }}
+  {{- if not $cp.serviceId }}
+  {{- fail "vllm: scaler.customProvider.serviceId is required when scaler.metricProvider is Custom -- it names the service whose decision to read, sent as the serviceId query parameter and matched against decisions[].serviceId in the reply (the server is free to answer with more than it was asked for)" }}
+  {{- end }}
+  {{- if .Values.metricsMock.enabled }}
+  {{- fail "vllm: metricsMock.enabled stands up a Prometheus query API, which the Custom provider never calls -- it reads a replica count off a decision server instead. Turn the mock off, or leave scaler.metricProvider on Prometheus" }}
+  {{- end }}
+{{- else }}
+  {{- if not $s.metrics }}
+  {{- fail "vllm: scaler.metrics must hold at least one query under the Prometheus metric provider (the CRD requires a non-empty list). Add one, or set scaler.metricProvider: Custom, which reads a replica count off a decision server and ignores metrics entirely" }}
+  {{- end }}
+{{- end }}
+{{- if and (not .Values.metricsMock.enabled) (not $s.serverAddress) }}
+{{- fail (printf "vllm: scaler.serverAddress is required -- under the %s provider that is %s" $provider (ternary "the decision server's base URL, e.g. http://decisions:80" "the Prometheus query API, e.g. http://prometheus-operated.monitoring.svc:9090" $custom)) }}
+{{- end }}
+
+{{- /* __SCOPE__ in any query expands to namespace="<ns>", app="<release>-vllm"
+       to scope it to THIS deployment's pods (app needs podTargetLabels: [app]
+       on the ServiceMonitor; namespace is always present). PromQL only, so it
+       goes unused under the Custom provider. */}}
+{{- $scope := printf "namespace=\"%s\", app=\"%s-vllm\"" .Release.Namespace .Release.Name }}
+
+{{- /* scaleDown's children, resolved up front: emitting the parent key with
+       nothing under it renders `scaleDown: null`, which is not the object the
+       CRD expects. deletionCostQuery is PromQL, so it is dropped under Custom --
+       serverAddress is a decision server with no query API there, and the
+       operator falls back to its newest-pod-first heuristic whatever this says. */}}
+{{- $sd := $s.scaleDown | default dict }}
+{{- $sdCost := and (not $custom) $sd.deletionCostQuery }}
 apiVersion: autoscaling.4pd.io/v1alpha1
 kind: LLMScaler
 metadata:
   name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
 spec:
-  syncPeriodSeconds: {{ .Values.scaler.syncPeriodSeconds }}
+  syncPeriodSeconds: {{ $s.syncPeriodSeconds }}
   targetRef:
     apiVersion: apps/v1
     kind: Deployment
     name: {{ .Release.Name }}
+  # Emitted rather than left to the CRD default, so the CR says outright which of
+  # the two signal sources is in play -- that choice is what decides whether
+  # serverAddress below is a query API or a decision server.
+  metricProvider: {{ $provider }}
   {{- if .Values.metricsMock.enabled }}
   # Driven by the metrics-mock (returns a fixed value) to simulate scaling.
   serverAddress: "http://{{ .Release.Name }}-metrics-mock.{{ .Release.Namespace }}:9090"
   {{- else }}
-  serverAddress: {{ .Values.scaler.serverAddress | quote }}
+  serverAddress: {{ $s.serverAddress | quote }}
   {{- end }}
-  {{- with .Values.scaler.serverHeaders }}
+  {{- with $s.serverHeaders }}
   serverHeaders:
     {{- toYaml . | nindent 4 }}
   {{- end }}
-  minReplicas: {{ .Values.scaler.minReplicas }}
-  maxReplicas: {{ .Values.scaler.maxReplicas }}
-  {{- /* __SCOPE__ in any query expands to namespace="<ns>", app="<release>-vllm"
-         to scope it to THIS deployment's pods (app needs podTargetLabels: [app]
-         on the ServiceMonitor; namespace is always present). */}}
-  {{- $scope := printf "namespace=\"%s\", app=\"%s-vllm\"" .Release.Namespace .Release.Name }}
+  minReplicas: {{ $s.minReplicas }}
+  maxReplicas: {{ $s.maxReplicas }}
+  {{- if $custom }}
+  # The replica count comes off the decision server at serverAddress. spec.metrics
+  # is omitted rather than left in place, because the provider never reads it and
+  # a stale query sitting in the CR only invites the belief that it still matters.
+  customProvider:
+    serviceId: {{ $cp.serviceId | quote }}
+    {{- with $cp.path }}
+    path: {{ . | quote }}
+    {{- end }}
+    {{- with $cp.namespace }}
+    # Narrows the match when the server reports this serviceId in more than one
+    # namespace. A serviceId matching several decisions is an error rather than a
+    # choice, so this is required as soon as the server can return duplicates.
+    namespace: {{ . | quote }}
+    {{- end }}
+  {{- else }}
   metrics:
-    {{- range .Values.scaler.metrics }}
+    {{- range $s.metrics }}
     - query: {{ .query | replace "__SCOPE__" $scope | quote }}
       target: {{ .target | quote }}
       {{- with .name }}
       name: {{ . | quote }}
       {{- end }}
     {{- end }}
-  {{- with .Values.scaler.scaleDown }}
+  {{- end }}
+  {{- if or $sd.behavior $sd.stabilizationWindowSeconds $sd.maxStepReplicas $sdCost }}
   scaleDown:
-    {{- with .behavior }}
+    {{- with $sd.behavior }}
     behavior: {{ . }}
     {{- end }}
-    {{- with .stabilizationWindowSeconds }}
+    {{- with $sd.stabilizationWindowSeconds }}
     stabilizationWindowSeconds: {{ . }}
     {{- end }}
-    {{- with .maxStepReplicas }}
+    {{- with $sd.maxStepReplicas }}
     maxStepReplicas: {{ . }}
     {{- end }}
-    {{- with .deletionCostQuery }}
-    deletionCostQuery: {{ . | replace "__SCOPE__" $scope | quote }}
+    {{- if $sdCost }}
+    deletionCostQuery: {{ $sd.deletionCostQuery | replace "__SCOPE__" $scope | quote }}
     {{- end }}
   {{- end }}
 {{- end -}}

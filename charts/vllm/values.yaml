@@ -139,13 +139,49 @@ scaler:
   minReplicas: 1
   maxReplicas: 5
   syncPeriodSeconds: 10
-  # Prometheus scrapes vLLM via the serviceMonitor below.
-  # Prometheus query endpoint (the /api/v1/query base). Adjust to your cluster;
-  # this is the headless Service the Prometheus Operator creates by default.
+
+  # Where the scaling signal comes from. The two are alternatives, not layers,
+  # and there is no fallback between them:
+  #
+  #   Prometheus  metrics below are PromQL, evaluated against serverAddress, and
+  #               replicas come out of ceil(readyReplicas * value / target).
+  #   Custom      metrics below are not read at all. serverAddress is a decision
+  #               server, and the scaler reads a replica count straight off it.
+  #               Requires customProvider.serviceId.
+  #
+  # Which one is in play also decides what serverAddress means, what has to be
+  # filled in below, and whether scaleDown.deletionCostQuery is consulted.
+  metricProvider: Prometheus
+
+  # The metric source endpoint. Under Prometheus it is the query API (the
+  # /api/v1/query base) -- the default below is the headless Service the
+  # Prometheus Operator creates, adjust it to your cluster, and note vLLM is
+  # scraped into it via the serviceMonitor further down. Under Custom it is
+  # instead the decision server's base URL, e.g. http://decisions:80.
   serverAddress: "http://prometheus-operated.monitoring.svc:9090"
-  # Optional HTTP headers for the metrics query (e.g. auth for a secured
-  # Prometheus). Empty for a typical in-cluster Prometheus.
+  # Optional HTTP headers sent with every fetch from serverAddress (e.g. auth for
+  # a secured endpoint). Used verbatim. Empty for a typical in-cluster
+  # Prometheus. Applies to both providers.
   serverHeaders: {}
+
+  # Only read when metricProvider is Custom; ignored otherwise.
+  customProvider:
+    # REQUIRED under Custom. Names the service whose decision to read. Sent as
+    # the serviceId query parameter, and matched against decisions[].serviceId in
+    # the reply -- the server is free to answer with more than it was asked for.
+    serviceId: ""
+    # Request path on serverAddress. The CRD defaults it to /decisions; left
+    # empty here so that default stands rather than being restated.
+    path: ""
+    # Narrows the match to decisions carrying this namespace, for a server that
+    # reports the same serviceId in several. Empty means serviceId alone selects
+    # the decision -- and a serviceId matching more than one is an error rather
+    # than a choice, so set this if the server can ever report duplicates.
+    namespace: ""
+
+  # Required (and non-empty) under the Prometheus provider; ignored entirely
+  # under Custom, which gets its recommendation from the decision server.
+  #
   # Each metric is a PromQL query (returning a single averaged value) plus a
   # per-replica target. Scaling compares them as
   # ceil(readyReplicas * value / target). Bake label filters into the query.
@@ -169,6 +205,8 @@ scaler:
   # colder pods should yield lower numbers. Evaluated against serverAddress at
   # scale-down time. Leave empty to use the built-in newest-pod-first heuristic.
   # Keep empty when metricsMock is enabled (the mock has no per-pod "pod" label).
+  # Being PromQL, it is dropped under the Custom provider -- serverAddress is a
+  # decision server with no query API there, so the heuristic is used regardless.
   scaleDown:
     behavior: CacheAware
     # Hold at the highest recommendation over this window before scaling down, so
