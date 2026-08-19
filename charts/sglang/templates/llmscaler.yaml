@@ -58,14 +58,14 @@
 apiVersion: autoscaling.4pd.io/v1alpha1
 kind: LLMScaler
 metadata:
-  name: {{ .Release.Name }}
+  name: {{ include "sglang.fullname" . }}
   namespace: {{ .Release.Namespace }}
 spec:
   syncPeriodSeconds: {{ $s.syncPeriodSeconds }}
   targetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ .Release.Name }}
+    name: {{ include "sglang.fullname" . }}
   # Emitted rather than left to the CRD default, so the CR says outright which of
   # the two signal sources is in play -- that choice is what decides whether
   # serverAddress below is a query API or a decision server.

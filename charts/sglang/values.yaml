@@ -1,3 +1,21 @@
+# Names every resource this chart owns. Empty means the release name, unadorned.
+#
+# Set it ONLY to keep an existing release's engine Deployment where it is: before
+# the resource names were simplified it was <release>-sglang, and renaming a live
+# Deployment is a delete-and-create, not a rolling update -- on a GPU node the
+# replacement cannot schedule until the old pod releases its GPU, so the upgrade
+# costs the grace period plus a cold model load. Pinning
+#
+#   fullnameOverride: <release>-sglang
+#
+# makes that upgrade ordinary. It does not restore the older Service
+# (<release>-sglang-svc) or LLMScaler (<release>-scaler), whose suffixes differed --
+# one value cannot be three names. Both are recreated either way, costing a new
+# ClusterIP and an operator re-adopt but no pod restart.
+#
+# The metrics mock and the CART subchart keep their own names and ignore this.
+fullnameOverride: ""
+
 # Only used when scaler.enabled is false. With the scaler on, the chart omits
 # spec.replicas entirely so the operator can own it (see deployment.yaml), and
 # the starting count comes from scaler.minReplicas instead.

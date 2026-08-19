@@ -38,7 +38,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ .Release.Name }}
+  name: {{ include "sglang.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
     app: {{ .Release.Name }}-sglang
