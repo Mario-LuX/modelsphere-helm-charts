@@ -210,6 +210,44 @@ serviceMonitor:
   podTargetLabels:
     - app
 
+# The cache-aware router (CART) for THIS model, deployed as part of this release
+# from the vendored subchart in charts/cart.
+#
+# Everything below `enabled` is the subchart's own values (charts/cart/values.yaml
+# is the documented source of truth, comments included). The keys restated here
+# are only the ones worth setting per model; leave them commented out to inherit
+# the subchart default.
+#
+# This is the whole switch. With modelRoute.enabled, turning it on also routes
+# through the CART -- nothing under modelRoute has to be set, or can be:
+#   - the modelRoute.cart block is written from the CART deployed here
+#   - a `- use: cart` tier goes to the top of modelRoute.nginx.peers
+#
+# The route never points anywhere else. A CART holds one model's prefix cache, so
+# it belongs to the release that owns that model and is never shared or borrowed
+# from elsewhere -- which is why there is nothing to configure.
+#
+# Deploying a CART without routing to it therefore takes an explicit
+# modelRoute.cart.enabled: false. That combination is only useful in the
+# subchart's standalone mode, where workers are written into baseConfig by hand
+# -- with no ModelRoute naming it, autoconfig never writes its workers, and the
+# pod waits in Init forever (deliberately, rather than CrashLooping -- see
+# waitForWorkers in the subchart).
+cart:
+  enabled: false
+  # image:
+  #   repository: harbor.4pd.io/hardcore-tech/cache_aware_router
+  #   tag: ""            # defaults to the subchart's appVersion
+  # CART's listen port, which the ModelRoute's cart.port follows.
+  # service:
+  #   port: 8071
+  # Per-model tuning of the config.yaml base that autoconfig refills the workers
+  # section of. Replaces the whole document, so copy the subchart's default first.
+  # baseConfig: |
+  #   ...
+  # resources:
+  #   limits: { cpu: "4", memory: 4Gi }
+
 # Publish this deployment to autoconfig as a ModelRoute
 # (routing.gpucluster.io/v1alpha1), so openresty's peers and the CART workers
 # follow the pods instead of being maintained by hand.
@@ -279,36 +317,46 @@ modelRoute:
     # static safety net -- if autoconfig is down during a rollout, every pod IP
     # it knows can be stale at once, and the ClusterIP still resolves because
     # kube-proxy maintains it.
+    #
+    # A cart tier is added on top of whatever is listed here whenever the route
+    # has a CART (cart.enabled above), at one priority higher than the highest
+    # below, so it leads and traffic still cascades down when it is banned. It
+    # carries maxConcurrencyFromBackend, which sizes its limit dynamically as
+    # (backend maxConcurrency x backend count) so it tracks scaling instead of
+    # being pinned to a stale number -- unless no backend tier here carries a
+    # maxConcurrency to multiply, in which case it is injected without a limit of
+    # its own and falls back to values.default_max above.
+    #
+    # Naming a cart peer explicitly turns the injection off and takes this list
+    # exactly as written -- the way to pin its priority or its concurrency:
+    #   - use: cart
+    #     priority: 9
+    #     maxConcurrency: 400
     peers:
       - use: backend
         priority: 2
         maxConcurrency: 100
       - use: backend-svc
         priority: 1
-      # Add CART on top (needs cart.enabled below). maxConcurrencyFromBackend
-      # sizes its limit dynamically as (backend maxConcurrency x backend count),
-      # so it tracks scaling instead of being pinned to a stale number.
-      # - use: cart
-      #   priority: 3
-      #   maxConcurrencyFromBackend: true
 
   # Cache-aware router (CART) in front of the backends. Off means nginx talks to
-  # them directly. A CART instance belongs to exactly one model -- prefix
-  # affinity only means anything within a single model -- so never point two
-  # ModelRoutes at one CART.
+  # them directly.
+  #
+  # Which CART is NOT configurable, for the same reason discovery is not: it is
+  # always the one cart.enabled deployed above, reached through its ClusterIP so
+  # a CART failover or rollout stays invisible to openresty. The chart knows the
+  # Service and ConfigMap it generated and writes them straight in, so there is
+  # no pair of names here that can drift apart. A CART is per-model and never
+  # shared, so there is no other CART this route could sensibly name.
   cart:
-    enabled: false
-    # REQUIRED when enabled: this model's own CART Service ("ns/name").
-    # Preferred over selector because nginx then reaches CART through a
-    # ClusterIP, which keeps CART failovers and rollouts invisible to openresty.
-    service: ""
-    selector: ""
-    # Omit to let autoconfig derive it from the Service (single-port only).
-    port: ""
-    # REQUIRED when enabled: the CART's own config ConfigMap ("ns/name") -- the
-    # cache_aware_router chart's <fullname>-config. Autoconfig rewrites only its
-    # workers section; the rest stays as that chart wrote it.
-    outputConfigMap: ""
+    # This and cart.enabled above both have to be on, and this one already is --
+    # so cart.enabled alone is what puts the CART in the route, and there is
+    # nothing to set here for the normal case. On its own it does nothing: with
+    # no CART deployed there is none to route to.
+    #
+    # Set it false to keep a deployed CART out of the route, and the injected
+    # peer with it: standalone mode only, see cart above.
+    enabled: true
     # Per-worker max_load.
     maxLoad: 20
 

@@ -25,13 +25,32 @@
 {{- $mr := .Values.modelRoute }}
 {{- $ownSvc := printf "%s/%s-vllm-svc" .Release.Namespace .Release.Name }}
 
-{{- /* Scan the peer list once: which tiers are in play, and what the backend
-       tier's per-instance concurrency is (the multiplier for a cart peer's
-       maxConcurrencyFromBackend). */}}
+{{- /* Is there a CART in this route? Both switches have to be on, and
+       modelRoute.cart.enabled already is, so cart.enabled alone is the whole
+       answer: it deploys the CART (the vendored subchart in charts/cart) and
+       routes through it. Deploying one and not routing to it is not a
+       configuration anyone reaches by accident -- it would sit in Init forever
+       waiting for workers autoconfig was never told to write.
+
+       The CART in this route is ALWAYS the one this release deploys. A CART
+       holds one model's prefix cache, so it belongs to the release that owns
+       that model and is never shared or borrowed from elsewhere. That is why
+       nothing below names it, and why modelRoute.cart.enabled cannot summon one
+       on its own: it is there to be set false, keeping a deployed CART out of
+       the route for the subchart's standalone mode (workers written into
+       cart.baseConfig by hand). */}}
+{{- $cartOn := and .Values.cart.enabled $mr.cart.enabled }}
+
+{{- /* Scan the peer list once: which tiers are in play, what the backend tier's
+       per-instance concurrency is (the multiplier for a cart peer's
+       maxConcurrencyFromBackend), and the top priority in use (what an injected
+       cart peer has to beat). */}}
 {{- $usesCart := false }}
 {{- $ccFromBackend := false }}
 {{- $backendCC := 0 }}
+{{- $topPriority := 0 }}
 {{- range $mr.nginx.peers }}
+  {{- $topPriority = max $topPriority (.priority | default 0 | int) }}
   {{- if eq (.use | toString) "cart" }}
     {{- $usesCart = true }}
     {{- if .maxConcurrencyFromBackend }}{{ $ccFromBackend = true }}{{ end }}
@@ -40,31 +59,61 @@
   {{- end }}
 {{- end }}
 
+{{- /* Put the CART in front of the peer list. Nobody has to restate the tier
+       here for the same reason nobody restates the Service in discovery: with a
+       CART in the route, routing to it IS the point, and a peers list that
+       forgot to mention it is a silent no-op rather than an error.
+
+       Priority is one above whatever is already there, so the CART leads no
+       matter how the tiers below were numbered, and traffic still cascades to
+       them when it is banned.
+
+       maxConcurrencyFromBackend sizes the CART's limit as (per-backend
+       concurrency x backend count), so it tracks scaling instead of being pinned
+       to a stale number -- but it needs a backend tier carrying maxConcurrency
+       as the multiplier. Without one, the peer is injected with no limit of its
+       own and falls back to nginx.values.default_max, rather than being injected
+       into a state the validation below rejects.
+
+       Writing a `- use: cart` peer explicitly turns all of this off: the list is
+       then taken exactly as authored. */}}
+{{- $peers := $mr.nginx.peers }}
+{{- if and $cartOn (not $usesCart) }}
+  {{- $cartPeer := dict "use" "cart" "priority" (add1 $topPriority) }}
+  {{- if gt (int $backendCC) 0 }}
+    {{- $cartPeer = set $cartPeer "maxConcurrencyFromBackend" true }}
+  {{- end }}
+  {{- $peers = prepend $peers $cartPeer }}
+{{- end }}
+
+{{- /* Where that CART is, on the same terms as discovery above: not configurable,
+       because the chart already knows the names it generated and a restated name
+       is only an opportunity to drift.
+
+       The names come from the subchart's own helpers rather than being
+       reassembled here, which is what makes that hold -- set
+       cart.fullnameOverride and this follows. Those helpers read .Values, .Chart
+       and .Release, so they are handed the subchart's slice of the values tree
+       instead of this chart's context. That slice only carries the subchart's
+       defaults while the subchart is enabled, and a disabled subchart takes its
+       _helpers.tpl out of the chart tree with it -- so these may only ever be
+       evaluated under $cartOn, which is exactly what cart.enabled gates. */}}
+{{- $sub := dict "Values" .Values.cart "Chart" (dict "Name" "cart") "Release" .Release }}
+
 {{- if not $mr.nginx.outputConfigMap }}
-{{- fail "vllm-mock: modelRoute.nginx.outputConfigMap is required -- it names the ConfigMap autoconfig writes this route into (\"ns/name\", e.g. llm-route/openresty-conf). The chart cannot guess where your openresty lives" }}
+{{- fail "vllm: modelRoute.nginx.outputConfigMap is required -- it names the ConfigMap autoconfig writes this route into (\"ns/name\", e.g. llm-route/openresty-conf). The chart cannot guess where your openresty lives" }}
 {{- end }}
 {{- if not $mr.nginx.peers }}
-{{- fail "vllm-mock: modelRoute.nginx.peers must hold at least one peer group (the CRD requires minItems: 1); the simplest is a single `- use: backend`" }}
+{{- fail "vllm: modelRoute.nginx.peers must hold at least one peer group (the CRD requires minItems: 1); the simplest is a single `- use: backend`" }}
 {{- end }}
-{{- if and $usesCart (not $mr.cart.enabled) }}
-{{- fail "vllm-mock: modelRoute.nginx.peers routes to `use: cart`, but modelRoute.cart.enabled is false, so the rendered spec would have no cart block for that peer to point at -- enable modelRoute.cart or drop the cart peer" }}
+{{- if and $usesCart (not $cartOn) }}
+{{- fail "vllm: modelRoute.nginx.peers routes to `use: cart`, but no CART is in this route, so the rendered spec would have no cart block for that peer to point at. That takes cart.enabled (off by default) to deploy one, and modelRoute.cart.enabled (on by default) to route to it. Set the first, un-set the second, or drop the cart peer -- note that with both on the cart peer is added for you, so writing one by hand is only for pinning its priority or concurrency" }}
 {{- end }}
 {{- if and $ccFromBackend (le (int $backendCC) 0) }}
-{{- fail "vllm-mock: modelRoute.nginx.peers has a cart peer with maxConcurrencyFromBackend, which sizes CART's limit as (per-backend concurrency x backend count) -- that needs a `use: backend` peer carrying maxConcurrency > 0 as the multiplier. Add one, or drop maxConcurrencyFromBackend and set a static maxConcurrency on the cart peer" }}
-{{- end }}
-{{- if $mr.cart.enabled }}
-  {{- if not $mr.cart.outputConfigMap }}
-  {{- fail "vllm-mock: modelRoute.cart.outputConfigMap is required when modelRoute.cart.enabled -- it is the CART's own config ConfigMap (\"ns/name\", the cache_aware_router chart's <fullname>-config), whose workers section autoconfig refills" }}
-  {{- end }}
-  {{- if and $mr.cart.service $mr.cart.selector }}
-  {{- fail "vllm-mock: modelRoute.cart.service and modelRoute.cart.selector are mutually exclusive -- set exactly one" }}
-  {{- end }}
-  {{- if not (or $mr.cart.service $mr.cart.selector) }}
-  {{- fail "vllm-mock: modelRoute.cart needs a service or a selector to find the CART pods. Prefer service (\"ns/name\"): nginx then reaches CART through its ClusterIP, so a CART failover or rollout stays invisible to openresty. Note CART is per-model, never shared" }}
-  {{- end }}
+{{- fail "vllm: modelRoute.nginx.peers has a cart peer with maxConcurrencyFromBackend, which sizes CART's limit as (per-backend concurrency x backend count) -- that needs a `use: backend` peer carrying maxConcurrency > 0 as the multiplier. Add one, or drop maxConcurrencyFromBackend and set a static maxConcurrency on the cart peer" }}
 {{- end }}
 {{- if and $mr.monitor.enabled (not $mr.monitor.outputConfigMap) }}
-{{- fail "vllm-mock: modelRoute.monitor.outputConfigMap is required when modelRoute.monitor.enabled -- it is the ConfigMap monitor reads (\"ns/name\", shared across models, one key per model)" }}
+{{- fail "vllm: modelRoute.monitor.outputConfigMap is required when modelRoute.monitor.enabled -- it is the ConfigMap monitor reads (\"ns/name\", shared across models, one key per model)" }}
 {{- end }}
 apiVersion: routing.gpucluster.io/v1alpha1
 kind: ModelRoute
@@ -90,20 +139,16 @@ spec:
     {{- if $mr.discovery.includeNotReady }}
     includeNotReady: true
     {{- end }}
-  {{- if $mr.cart.enabled }}
-  # Cache-aware router for THIS model. CART is per-model by nature -- prefix
-  # affinity is only meaningful within one model -- so never point two
-  # ModelRoutes at the same one.
+  {{- if $cartOn }}
+  # Cache-aware router for THIS model, deployed by this release. CART is
+  # per-model by nature -- prefix affinity is only meaningful within one model --
+  # so it is never shared, and two ModelRoutes never name the same one.
   cart:
-    {{- if $mr.cart.selector }}
-    selector: {{ $mr.cart.selector | quote }}
-    {{- else }}
-    service: {{ $mr.cart.service | quote }}
-    {{- end }}
-    {{- with $mr.cart.port }}
-    port: {{ . }}
-    {{- end }}
-    outputConfigMap: {{ $mr.cart.outputConfigMap | quote }}
+    service: {{ printf "%s/%s" .Release.Namespace (include "cart.fullname" $sub) | quote }}
+    # Emitted rather than left to autoconfig's auto-derivation, for the same
+    # reason as discovery.port above.
+    port: {{ .Values.cart.service.port }}
+    outputConfigMap: {{ printf "%s/%s" .Release.Namespace (include "cart.configMapName" $sub) | quote }}
     {{- with $mr.cart.maxLoad }}
     maxLoad: {{ . }}
     {{- end }}
@@ -131,9 +176,11 @@ spec:
       {{- end }}
     {{- end }}
     # Ordered peer groups; higher priority wins, and traffic only cascades to a
-    # lower tier once every peer above it is banned.
+    # lower tier once every peer above it is banned. A cart tier at the top is
+    # added by the chart whenever the route has a CART and the list does not
+    # already name one.
     peers:
-      {{- toYaml $mr.nginx.peers | nindent 6 }}
+      {{- toYaml $peers | nindent 6 }}
   {{- if $mr.monitor.enabled }}
   monitor:
     outputConfigMap: {{ $mr.monitor.outputConfigMap | quote }}

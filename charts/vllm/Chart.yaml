@@ -2,5 +2,18 @@ apiVersion: v2
 name: vllm
 description: A Helm chart for deploying a minimal vLLM model
 type: application
-version: 0.2.0
+version: 0.3.0
 appVersion: "1.0.0"
+
+# CART is vendored under charts/cart -- already present, so no `helm dependency
+# update` is needed and `helm install ./charts/vllm` works offline. The entry
+# exists only to carry the condition: without it Helm renders a vendored
+# subchart unconditionally.
+#
+# CART belongs to exactly one model (prefix affinity only means anything within
+# a single model), which is why it ships inside the chart that owns the model
+# rather than being installed alongside it.
+dependencies:
+  - name: cart
+    version: 0.1.2
+    condition: cart.enabled
