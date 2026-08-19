@@ -130,6 +130,8 @@ metadata:
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  finalizers:
+    - routing.gpucluster.io/cleanup
 spec:
   # The backend bucket: what feeds CART's workers, nginx's backend peers and
   # monitor's service rows. Always this release's own Service, so a scale event
