@@ -3,6 +3,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: {{ .Release.Name }}-vllm
+  namespace: {{ .Release.Namespace }}
   labels:
     app: {{ .Release.Name }}-vllm
     {{- with .Values.serviceMonitor.labels }}
