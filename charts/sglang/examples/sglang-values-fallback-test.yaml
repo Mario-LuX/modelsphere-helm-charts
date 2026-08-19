@@ -152,18 +152,19 @@ scaler:
   minReplicas: 1
   maxReplicas: 8
   syncPeriodSeconds: 10
-  serverAddress: "http://prometheus-operated.monitoring.svc:9090"
-  metrics:
-    - name: queue-depth
-      query: 'avg(avg_over_time(sglang:num_queue_reqs{__SCOPE__}[1m]))'
-      target: "5"
+  metricProvider: Custom
+  serverAddress: "http://decision-gen.llm-scaler.svc:80"
+  customProvider:
+    serviceId: "fallback-modelforge-01"
+    path: "/decisions"
+    namespace: "modelforge"
   scaleDown:
     behavior: CacheAware
     # A cold start on a 35B model is expensive, so do not shrink on a brief dip.
     stabilizationWindowSeconds: 300
     # ...and give up at most one warm replica per sync period once we do shrink.
     maxStepReplicas: 2
-    deletionCostQuery: 'sglang:token_usage{__SCOPE__} * 100'
+    deletionCostQuery: ''
 
 serviceMonitor:
   enabled: true
