@@ -121,7 +121,7 @@ affinity:
         - key: nvidia.com/gpu.product
           operator: In
           values:
-          - "NVIDIA-H100-80GB-HBM3"
+          - NVIDIA-A100-SXM4-80GB
         - key: nvidia.com/cuda.driver-version.full
           operator: In
           values:
