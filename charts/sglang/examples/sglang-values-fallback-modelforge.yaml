@@ -7,8 +7,7 @@ image:
   tag: "v0.5.15-cu129"
 
 model:
-  # --served-model-name kimi-k2.6
-  name: "kimi-k2.6"
+  name: "kimi"
   # -v /mnt/disk0/models/modelforge/Qwen3.6-35B-A3B-793303:/model
   # The chart mounts this itself and passes --model-path, so only the host path
   # is needed. (The chart mounts at /data/models, not /model -- the container

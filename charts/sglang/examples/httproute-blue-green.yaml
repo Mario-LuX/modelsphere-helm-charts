@@ -1,0 +1,123 @@
+# Gateway API HTTPRoute for a blue/green model migration.
+#
+# Temporary infrastructure: it exists only between the moment green is ready and
+# the moment green takes over the real route name. Delete it at the end (step 6
+# of docs/blue-green-migration.md) -- a forgotten rewrite is very hard to debug
+# later, because the path a client asks for stops being the path openresty serves.
+#
+# What it does: clients keep calling /fallback-modelforge-0.1 unchanged, while the
+# gateway rewrites the prefix to /fallback-modelforge-0.1-green and forwards to the
+# same openresty. Blue and green are two separate openresty routes (autoconfig
+# keys its ConfigMap per route), so both stay live and switching is a rewrite, not
+# a redeploy.
+#
+# MIND THE DOT. Two similar-looking names are deliberately different, because a
+# namespace cannot contain a dot and a route can:
+#
+#   fallback-modelforge-0.1     openresty route == URL path      <- used below
+#   fallback-modelforge-01      Kubernetes namespace             <- NOT used below
+#
+# Every path in this file (`value`, `replacePrefixMatch`) is a URL path and takes
+# the DOTTED spelling. Building the rewrite from the namespace name matches
+# nothing: the rule never fires, traffic silently keeps going to blue, and it
+# reads as "the cutover did nothing" rather than as an error.
+#
+# Adjust before applying:
+#   - parentRefs: your Gateway's name/namespace
+#   - the openresty Service name/port (llm-route/openresty:8080 below, matching
+#     modelRoute.nginx.service in sglang-values-fallback-modelforge.yaml)
+---
+# Only needed when the HTTPRoute and the openresty Service are in DIFFERENT
+# namespaces. Gateway API forbids cross-namespace backendRefs unless the backend
+# side grants it. Drop this document if you put the HTTPRoute in llm-route.
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-gateway-to-openresty
+  namespace: llm-route
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: llm-gateway        # where the HTTPRoute below lives
+  to:
+    - group: ""
+      kind: Service
+      name: openresty
+---
+# VARIANT A -- hard cutover (100% to green).
+#
+# Start here: it is the variant every Gateway controller implements. The cost is
+# that green's CART prefix cache is empty at the instant it takes all traffic, so
+# expect a TTFT spike until it warms.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: fallback-modelforge-bluegreen
+  namespace: llm-gateway
+spec:
+  parentRefs:
+    - name: llm-gateway             # your Gateway
+      namespace: llm-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /fallback-modelforge-0.1
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /fallback-modelforge-0.1-green
+      backendRefs:
+        - name: openresty
+          namespace: llm-route
+          port: 8080
+---
+# VARIANT B -- weighted ramp, so green's cache warms before it carries everything.
+#
+# Same rule, two backendRefs to the SAME openresty: the unfiltered one keeps
+# hitting blue's route, the filtered one rewrites to green's. Shift the weights
+# over successive applies (95/5 -> 80/20 -> 50/50 -> 0/100).
+#
+# REQUIRES per-backendRef filters (HTTPBackendRef.filters), which is optional in
+# the Gateway API spec and NOT implemented by every controller. Two backendRefs
+# naming the same Service is also unusual enough that some controllers reject it.
+# Verify on a scratch route first -- check `status.parents[].conditions` on the
+# HTTPRoute for Accepted=True -- and fall back to Variant A if it is not honoured.
+#
+# Delete VARIANT A above if you use this one; two HTTPRoutes matching the same
+# path on the same Gateway is ambiguous.
+#
+# apiVersion: gateway.networking.k8s.io/v1
+# kind: HTTPRoute
+# metadata:
+#   name: fallback-modelforge-bluegreen
+#   namespace: llm-gateway
+# spec:
+#   parentRefs:
+#     - name: llm-gateway
+#       namespace: llm-gateway
+#   rules:
+#     - matches:
+#         - path:
+#             type: PathPrefix
+#             value: /fallback-modelforge-0.1
+#       backendRefs:
+#         # blue: no filter, path passes through untouched
+#         - name: openresty
+#           namespace: llm-route
+#           port: 8080
+#           weight: 90
+#         # green: same backend, prefix rewritten to the -green route
+#         - name: openresty
+#           namespace: llm-route
+#           port: 8080
+#           weight: 10
+#           filters:
+#             - type: URLRewrite
+#               urlRewrite:
+#                 path:
+#                   type: ReplacePrefixMatch
+#                   replacePrefixMatch: /fallback-modelforge-0.1-green
