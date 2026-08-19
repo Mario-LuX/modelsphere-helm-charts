@@ -259,12 +259,15 @@ serviceMonitor:
 # it belongs to the release that owns that model and is never shared or borrowed
 # from elsewhere -- which is why there is nothing to configure.
 #
-# Deploying a CART without routing to it therefore takes an explicit
-# modelRoute.cart.enabled: false. That combination is only useful in the
-# subchart's standalone mode, where workers are written into baseConfig by hand
-# -- with no ModelRoute naming it, autoconfig never writes its workers, and the
-# pod waits in Init forever (deliberately, rather than CrashLooping -- see
-# waitForWorkers in the subchart).
+# A deployed CART is therefore always a routed CART, and there is no switch under
+# modelRoute to separate the two. Nor is separating them useful: autoconfig
+# writes CART's worker list off that very CR, so a CART with no ModelRoute naming
+# it never gets one -- it waits in Init (deliberately, rather than CrashLooping)
+# and then CrashLoops on the empty list once waitForWorkers gives up.
+#
+# The one case for an unrouted CART is the subchart's standalone mode, where the
+# workers are written into baseConfig below by hand. That means this on and
+# modelRoute.enabled off -- not a CART deployed alongside a route that ignores it.
 cart:
   enabled: false
   # image:
@@ -380,15 +383,12 @@ modelRoute:
   # Service and ConfigMap it generated and writes them straight in, so there is
   # no pair of names here that can drift apart. A CART is per-model and never
   # shared, so there is no other CART this route could sensibly name.
+  #
+  # There is no `enabled` here: cart.enabled above is the only switch, and a
+  # deployed CART is always a routed one. A second flag could only restate that
+  # or contradict it, and one that says "route to a CART" while quietly doing
+  # nothing (because none was deployed) is worse than not having it.
   cart:
-    # This and cart.enabled above both have to be on, and this one already is --
-    # so cart.enabled alone is what puts the CART in the route, and there is
-    # nothing to set here for the normal case. On its own it does nothing: with
-    # no CART deployed there is none to route to.
-    #
-    # Set it false to keep a deployed CART out of the route, and the injected
-    # peer with it: standalone mode only, see cart above.
-    enabled: true
     # Per-worker max_load.
     maxLoad: 20
 

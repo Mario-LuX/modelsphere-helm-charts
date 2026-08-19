@@ -8,6 +8,23 @@ model:
   gpus: "2"
   contextLength: ""
 
+cart:
+  enabled: true
+
+modelRoute:
+  enabled: true
+  nginx:
+    outputConfigMap: "llm-route/openresty-conf"
+    service: "llm-route/openresty"
+    route: "test-kimi-k2.6"
+    values:
+      default_max: "50"
+      kimi_normalize_default_enabled: "false"
+      tps_limit_tps: "30"
+      ttft_limit_ms: "20000"
+  cart:
+    maxLoad: 100
+
 modelCheck:
   enabled: true
   requiredGlobs:

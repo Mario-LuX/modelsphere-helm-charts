@@ -25,21 +25,25 @@
 {{- $mr := .Values.modelRoute }}
 {{- $ownSvc := printf "%s/%s-vllm-svc" .Release.Namespace .Release.Name }}
 
-{{- /* Is there a CART in this route? Both switches have to be on, and
-       modelRoute.cart.enabled already is, so cart.enabled alone is the whole
-       answer: it deploys the CART (the vendored subchart in charts/cart) and
-       routes through it. Deploying one and not routing to it is not a
-       configuration anyone reaches by accident -- it would sit in Init forever
-       waiting for workers autoconfig was never told to write.
+{{- /* Is there a CART in this route? cart.enabled is the whole answer, and the
+       only switch: it deploys the CART (the vendored subchart in charts/cart)
+       and routes through it, filling in the cart block below and adding the cart
+       peer. There is deliberately no second switch here to say "route to a CART"
+       independently -- it could only ever restate cart.enabled or contradict it,
+       and a flag that cannot be honoured is worse than no flag.
+
+       So a deployed CART is always a routed CART. That is also the only useful
+       arrangement: autoconfig writes CART's worker list off this very CR, and a
+       CART with no ModelRoute naming it never gets one (it waits in Init, then
+       CrashLoops on the empty list -- see waitForWorkers in the subchart). To
+       run one unrouted on purpose, leave modelRoute.enabled off entirely and
+       write the workers into cart.baseConfig by hand.
 
        The CART in this route is ALWAYS the one this release deploys. A CART
        holds one model's prefix cache, so it belongs to the release that owns
-       that model and is never shared or borrowed from elsewhere. That is why
-       nothing below names it, and why modelRoute.cart.enabled cannot summon one
-       on its own: it is there to be set false, keeping a deployed CART out of
-       the route for the subchart's standalone mode (workers written into
-       cart.baseConfig by hand). */}}
-{{- $cartOn := and .Values.cart.enabled $mr.cart.enabled }}
+       that model and is never shared or borrowed from elsewhere -- which is why
+       nothing below names it. */}}
+{{- $cartOn := .Values.cart.enabled }}
 
 {{- /* Scan the peer list once: which tiers are in play, what the backend tier's
        per-instance concurrency is (the multiplier for a cart peer's
@@ -107,7 +111,7 @@
 {{- fail "vllm: modelRoute.nginx.peers must hold at least one peer group (the CRD requires minItems: 1); the simplest is a single `- use: backend`" }}
 {{- end }}
 {{- if and $usesCart (not $cartOn) }}
-{{- fail "vllm: modelRoute.nginx.peers routes to `use: cart`, but no CART is in this route, so the rendered spec would have no cart block for that peer to point at. That takes cart.enabled (off by default) to deploy one, and modelRoute.cart.enabled (on by default) to route to it. Set the first, un-set the second, or drop the cart peer -- note that with both on the cart peer is added for you, so writing one by hand is only for pinning its priority or concurrency" }}
+{{- fail "vllm: modelRoute.nginx.peers routes to `use: cart`, but no CART is in this route, so the rendered spec would have no cart block for that peer to point at. Set cart.enabled, or drop the cart peer -- and note that with cart.enabled the peer is added for you, so writing one by hand is only for pinning its priority or concurrency" }}
 {{- end }}
 {{- if and $ccFromBackend (le (int $backendCC) 0) }}
 {{- fail "vllm: modelRoute.nginx.peers has a cart peer with maxConcurrencyFromBackend, which sizes CART's limit as (per-backend concurrency x backend count) -- that needs a `use: backend` peer carrying maxConcurrency > 0 as the multiplier. Add one, or drop maxConcurrencyFromBackend and set a static maxConcurrency on the cart peer" }}
