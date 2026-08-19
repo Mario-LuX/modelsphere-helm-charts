@@ -1,8 +1,6 @@
 # A example values setup for fallback modelforge.
 # Consult real GitOps repo for deploy values
 
-replicaCount: 1
-
 image:
   # harbor.4pd.io/hardcore-tech/sglang:v0.5.15-cu129
   repository: "harbor.4pd.io/hardcore-tech/sglang"
@@ -120,16 +118,9 @@ env:
   # not granted.
 
 volumes:
-  # -v /root/deploy/modelforge-0.1-p8050/.cache:/root/.cache
-  # hostPath keeps the script's behaviour (a per-node cache). A PVC would be the
-  # better choice if these pods can move between nodes.
   - name: dot-cache
-    hostPath:
-      path: /root/deploy/modelforge-0.1-p8050/.cache
-      type: DirectoryOrCreate
-  # Stand-in for --ipc=host: torch's TP workers need a large shared-memory
-  # segment. This gives them one without putting the pod in the host IPC
-  # namespace. See the note below.
+    emptyDir:
+      sizeLimit: 10Gi
   - name: dshm
     emptyDir:
       medium: Memory
@@ -140,6 +131,34 @@ volumeMounts:
     mountPath: /root/.cache
   - name: dshm
     mountPath: /dev/shm
+
+# Only ephemeral-storage is set here, because it is the one the volumes above
+# make concrete: dot-cache can reach 10Gi, plus the writable layer and logs, all
+# against the filesystem holding /var/lib/kubelet. Without the request the
+# scheduler does not know that and will pack replicas onto a node until its disk
+# runs out. (The model itself is a hostPath and never counts.)
+#
+# cpu and memory are deliberately left unset -- the script gave no numbers to
+# carry over, and a guessed memory limit OOM-kills a 35B load that would
+# otherwise have finished. Add them once you have measured.
+resources:
+  requests:
+    ephemeral-storage: 16Gi
+  limits:
+    ephemeral-storage: 16Gi
+
+# The chart's 600s default is HALF this model's startup budget (15s x 80 = 1200s
+# above), so a rollout would be marked ProgressDeadlineExceeded every time, while
+# the new pod was still loading exactly as intended. 2400 leaves the 20 minutes
+# of loading plus room for pulling a multi-GB engine image onto a cold node.
+# The chart refuses to render if this drops back below the probe budget.
+progressDeadlineSeconds: 2400
+
+# Rolling with maxSurge: 1 (the chart default) needs 2 spare GPUs for the
+# incoming replica, since each one claims model.gpus. On a fully-booked cluster
+# the new pod stays Pending and the rollout stalls -- old pods keep serving, and
+# the deadline above is what eventually reports it. Set maxSurge: 0 /
+# maxUnavailable: 1 instead if these H100s are always fully allocated.
 
 # The script ran on one fixed host. On a cluster, steer the pod to nodes that
 # actually have two matching GPUs.
@@ -181,8 +200,8 @@ lifecycle:
 # script did.
 scaler:
   enabled: true
-  minReplicas: 1
-  maxReplicas: 8
+  minReplicas: 24
+  maxReplicas: 28
   syncPeriodSeconds: 10
   serverAddress: "http://prometheus-operated.monitoring.svc:9090"
   metrics:

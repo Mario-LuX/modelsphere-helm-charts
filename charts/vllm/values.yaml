@@ -341,6 +341,11 @@ env: []
 
 # Additional volumes on the output Deployment definition. The model volume built
 # from model.localPath is always mounted; these are added alongside it.
+#
+# Be careful with hostPath: with the scaler on, several replicas can land on one
+# node and would then share it. Read-only reference data (the model itself) is
+# fine that way. Anything the server WRITES is not -- a JIT or compile cache
+# shared by concurrent pods corrupts, so give those an emptyDir per pod.
 volumes: []
   # - name: shm
   #   emptyDir:
@@ -351,6 +356,74 @@ volumes: []
 volumeMounts: []
   # - name: shm
   #   mountPath: /dev/shm
+
+# CPU, memory and ephemeral-storage for the engine container. Merged with the
+# GPU limit, which stays derived from model.gpus -- naming nvidia.com/gpu here
+# is refused at render time, so only one place ever says how many GPUs.
+#
+# ephemeral-storage is the one worth setting deliberately. It covers the
+# container's writable layer, its logs, and every non-memory-backed emptyDir --
+# all of it on the filesystem holding the kubelet root directory
+# (/var/lib/kubelet), NOT the disk model.localPath points at, which is a
+# hostPath and is never counted. The request is what the scheduler subtracts
+# from the node, so without one it will happily pack more replicas onto a node
+# than its disk can hold; the limit is what evicts a pod that overruns. Size it
+# past the emptyDir sizeLimits in volumes above.
+#
+# Leaving memory unset is normal for a GPU workload: the weights sit in VRAM,
+# and a limit guessed too low OOM-kills the pod partway through a load that
+# would otherwise have succeeded. Set it once you have measured RSS.
+resources: {}
+  # requests:
+  #   cpu: "8"
+  #   memory: 64Gi
+  #   ephemeral-storage: 20Gi
+  # limits:
+  #   memory: 96Gi
+  #   ephemeral-storage: 20Gi
+
+# How a `helm upgrade` -- or any change to the pod template -- replaces the
+# running pods.
+#
+# The default is the gentle order: start a new replica, wait for it to pass its
+# probes, and only then take an old one away. Capacity never dips below the
+# current replica count, which matters here because a replacement takes minutes
+# to load a model, not seconds.
+#
+# What it costs is a free GPU slot. maxSurge: 1 means one extra replica exists
+# during the rollout, so with model.gpus GPUs each, a cluster with nothing spare
+# leaves the new pod Pending and the rollout stalls until progressDeadlineSeconds
+# expires. The old pods keep serving throughout, so that is a visible stall
+# rather than an outage -- but if your GPUs are always fully allocated, flip to
+# maxSurge: 0 / maxUnavailable: 1 and accept losing one replica's capacity while
+# the rollout walks through the fleet. Where a model needs every GPU on its node
+# and two copies can never coexist, `type: Recreate` is the honest choice: it
+# tears down the old pods first, at the price of a full outage during the swap.
+#
+# Absolute counts rather than the percentage forms, which round in opposite
+# directions (maxSurge up, maxUnavailable down) and are easy to get wrong at
+# small replica counts.
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+# How long a rollout has to get the new pod Ready before the Deployment is
+# marked ProgressDeadlineExceeded. That is not a rollback -- the old pods keep
+# serving and the new one keeps trying -- but it is what `kubectl rollout status`
+# and GitOps controllers report as a failed rollout, so it should not fire on a
+# model that is simply slow to load.
+#
+# It has to clear the startupProbe budget (failureThreshold x periodSeconds,
+# 300s with the values above) plus image pull and scheduling. The chart
+# checks the probe half at render time; the pull is on you, and a multi-GB engine
+# image landing on a cold node can take several minutes on its own.
+progressDeadlineSeconds: 600
+
+# How many old ReplicaSets to keep for rollback. They hold no pods, so this is
+# about rollback depth, not resources.
+revisionHistoryLimit: 10
 
 # Pin the GPU pods to particular nodes. `affinity` is the place for node
 # affinity / anti-affinity rules; nodeSelector and tolerations are the simpler

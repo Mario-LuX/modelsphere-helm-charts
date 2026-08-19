@@ -374,6 +374,11 @@ env: []
 
 # Additional volumes on the output Deployment definition. The model volume built
 # from model.localPath is always mounted; these are added alongside it.
+#
+# Be careful with hostPath: with the scaler on, several replicas can land on one
+# node and would then share it. Read-only reference data (the model itself) is
+# fine that way. Anything the server WRITES is not -- a JIT or compile cache
+# shared by concurrent pods corrupts, so give those an emptyDir per pod.
 volumes: []
   # - name: shm
   #   emptyDir:
@@ -384,6 +389,27 @@ volumes: []
 volumeMounts: []
   # - name: shm
   #   mountPath: /dev/shm
+
+resources: {}
+  # requests:
+  #   cpu: "8"
+  #   memory: 64Gi
+  #   ephemeral-storage: 20Gi
+  # limits:
+  #   memory: 96Gi
+  #   ephemeral-storage: 20Gi
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+progressDeadlineSeconds: 1800
+
+# How many old ReplicaSets to keep for rollback. They hold no pods, so this is
+# about rollback depth, not resources.
+revisionHistoryLimit: 10
 
 # Pin the GPU pods to particular nodes. `affinity` is the place for node
 # affinity / anti-affinity rules; nodeSelector and tolerations are the simpler

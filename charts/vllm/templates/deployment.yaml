@@ -13,6 +13,22 @@
 {{- if gt (int $budget) (int .Values.terminationGracePeriodSeconds) }}
 {{- fail (printf "vllm-mock: terminationGracePeriodSeconds (%d) is smaller than the shutdown budget (%d = preStop endpointSyncSeconds %d + drainSeconds %d + lifecycle.shutdownTimeout %d); the pod would be SIGKILLed mid-drain" (int .Values.terminationGracePeriodSeconds) (int $budget) (int $preStop.endpointSyncSeconds) (int $preStop.drainSeconds) (int .Values.lifecycle.shutdownTimeout)) }}
 {{- end }}
+{{/*
+  A rollout has a budget too, at the other end of the pod's life. The
+  replacement pod has progressDeadlineSeconds to reach Ready, and its
+  startupProbe alone is entitled to failureThreshold x periodSeconds before it
+  has to answer anything. If the deadline does not clear that, a Deployment that
+  is loading a large model exactly as intended gets marked
+  ProgressDeadlineExceeded -- no rollback, the old pods keep serving, but
+  `kubectl rollout status` and any GitOps controller watching it report a failed
+  rollout. Fail here instead, where the numbers are visible.
+*/}}
+{{- $sp := .Values.startupProbe | default dict }}
+{{- $startupBudget := add (int ($sp.initialDelaySeconds | default 0)) (mul (int ($sp.failureThreshold | default 3)) (int ($sp.periodSeconds | default 10))) }}
+{{- $deadline := int (.Values.progressDeadlineSeconds | default 600) }}
+{{- if le $deadline $startupBudget }}
+{{- fail (printf "vllm-mock: progressDeadlineSeconds (%d) does not clear the startupProbe budget (%d = failureThreshold %d x periodSeconds %d); the rollout would be marked ProgressDeadlineExceeded while the new pod is still legitimately loading the model. Raise it past the startup budget plus image-pull time" $deadline $startupBudget (int ($sp.failureThreshold | default 3)) (int ($sp.periodSeconds | default 10))) }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -33,6 +49,27 @@ spec:
   # Leaving it out lets the operator own the field outright. The initial replica
   # count then comes from scaler.minReplicas on the first reconcile, not from
   # replicaCount.
+  {{- end }}
+  {{- with .Values.strategy }}
+  strategy:
+    {{- /* rollingUpdate is only legal under type: RollingUpdate -- the API
+           server rejects a Deployment carrying both. Helm deep-merges values,
+           so someone setting nothing but `type: Recreate` still inherits the
+           default rollingUpdate block below and would get that rejection with
+           no clue where the block came from. Drop it instead: under Recreate it
+           has no meaning, so there is nothing for anyone to decide. */}}
+    {{- if eq (.type | default "RollingUpdate") "Recreate" }}
+    {{- toYaml (omit . "rollingUpdate") | nindent 4 }}
+    {{- else }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+  {{- with .Values.progressDeadlineSeconds }}
+  # Checked against the startupProbe budget by the block at the top of this file.
+  progressDeadlineSeconds: {{ . }}
+  {{- end }}
+  {{- with .Values.revisionHistoryLimit }}
+  revisionHistoryLimit: {{ . }}
   {{- end }}
   selector:
     matchLabels:
@@ -113,9 +150,24 @@ spec:
         {{- with .Values.volumeMounts }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+        {{- /* The GPU limit stays derived from model.gpus -- the one place this
+               chart names a GPU count -- and is merged over whatever else is in
+               .Values.resources, so cpu/memory/ephemeral-storage can be set
+               without restating it. A second way to say "2 GPUs" would only
+               drift, so naming it under resources is refused rather than
+               silently ignored.
+
+               nvidia.com/gpu is an extended resource: it belongs in limits
+               only, and the kubelet sets the request equal to it. */}}
+        {{- $res := .Values.resources | default dict }}
+        {{- range $section := list "limits" "requests" }}
+        {{- if hasKey (index $res $section | default dict) "nvidia.com/gpu" }}
+        {{- fail (printf "vllm-mock: set the GPU count with model.gpus, not resources.%s -- model.gpus is what renders nvidia.com/gpu and what the rest of the chart refers to" $section) }}
+        {{- end }}
+        {{- end }}
         resources:
-          limits:
-            nvidia.com/gpu: "{{ .Values.model.gpus }}"
+          {{- $gpu := dict "limits" (dict "nvidia.com/gpu" (printf "%v" .Values.model.gpus)) }}
+          {{- toYaml (mergeOverwrite (deepCopy $res) $gpu) | nindent 10 }}
         {{- if $preStop.enabled }}
         lifecycle:
           preStop:

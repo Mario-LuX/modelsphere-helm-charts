@@ -1,0 +1,183 @@
+image:
+  repository: "harbor.4pd.io/hardcore-tech/sglang"
+  tag: "v0.5.15-cu129"
+
+model:
+  name: "kimi-k2.6"
+  localPath: "/mnt/disk0/models/modelforge/Qwen3.6-35B-A3B-793303"
+  gpus: "2"
+  contextLength: ""
+
+modelCheck:
+  enabled: true
+  requiredGlobs:
+    - "config.json"
+    - "*.safetensors"
+
+service:
+  type: ClusterIP
+  port: 8050
+
+startupProbe:
+  httpGet:
+    path: /health
+    port: http
+  periodSeconds: 15
+  timeoutSeconds: 10
+  failureThreshold: 80
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+livenessProbe:
+  httpGet:
+    path: /health_generate
+    port: http
+  periodSeconds: 60
+  timeoutSeconds: 25
+  failureThreshold: 4
+
+extraArgs:
+  - "--tp-size=2"
+  - "--mamba-radix-cache-strategy=extra_buffer"
+  - "--chunked-prefill-size=16384"
+  - "--mem-fraction-static=0.83"
+  - "--enable-cache-report"
+  - "--stream-response-default-include-usage"
+  - "--reasoning-parser=qwen3"
+  - "--tool-call-parser=qwen3_coder"
+
+env:
+  - name: NVIDIA_DISABLE_REQUIRE
+    value: "1"
+  - name: PYTORCH_ALLOC_CONF
+    value: "expandable_segments:True"
+
+volumes:
+  # Per-pod, not a hostPath: several replicas can land on one node (2 GPUs each,
+  # so four fit an 8-GPU node) and would then write each other's JIT and compile
+  # artifacts in a shared /root/.cache. Costs a cold compile per start, which the
+  # startupProbe budget covers. See sglang-values-fallback-modelforge.yaml for
+  # the full reasoning and for how to keep a warm cache instead.
+  - name: dot-cache
+    emptyDir:
+      sizeLimit: 10Gi
+  - name: dshm
+    emptyDir:
+      medium: Memory
+      sizeLimit: 16Gi
+
+volumeMounts:
+  - name: dot-cache
+    mountPath: /root/.cache
+  - name: dshm
+    mountPath: /dev/shm
+
+# Covers the 10Gi dot-cache above plus the writable layer and logs, so the
+# scheduler stops packing replicas onto a node whose kubelet disk cannot hold
+# them. cpu/memory left unset on purpose; see the modelforge example.
+resources:
+  requests:
+    ephemeral-storage: 16Gi
+  limits:
+    ephemeral-storage: 16Gi
+
+# 600 (the chart default) is below this model's 15s x 80 = 1200s startup budget,
+# so every rollout would report ProgressDeadlineExceeded while the pod was still
+# loading normally. Covers the load plus image pull.
+progressDeadlineSeconds: 2400
+
+# The script ran on one fixed host. On a cluster, steer the pod to nodes that
+# actually have two matching GPUs.
+nodeSelector: {}
+tolerations: []
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: nvidia.com/gpu.product
+          operator: In
+          values:
+          - "NVIDIA-H100-80GB-HBM3"
+        - key: nvidia.com/cuda.driver-version.full
+          operator: In
+          values:
+          - "575.57.08"
+
+# Graceful shutdown, sized for this model rather than the chart's opt-125m
+# defaults. A 35B model answering long prompts can generate for minutes, and
+# SGLang's post-SIGTERM drain has no timeout of its own, so
+# terminationGracePeriodSeconds is what ultimately cuts it off.
+terminationGracePeriodSeconds: 3600
+lifecycle:
+  preStop:
+    enabled: true
+    endpointSyncSeconds: 5
+    # Bounded draining happens here, where the hook can exit early once the
+    # server reports idle. 5 + 600 + 20 = 625, inside the 3600 above.
+    drainSeconds: 600
+    pollIntervalSeconds: 5
+  shutdownReserveSeconds: 20
+  forceShutdown: false
+
+# The chart always ships an LLMScaler. Bounds are conservative on purpose: each
+# replica claims 2 GPUs, so maxReplicas: 2 is already 4 GPUs. Set
+# scaler.enabled: false to deploy this as a plain fixed Deployment like the
+# script did.
+scaler:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 8
+  syncPeriodSeconds: 10
+  serverAddress: "http://prometheus-operated.monitoring.svc:9090"
+  metrics:
+    - name: queue-depth
+      query: 'avg(avg_over_time(sglang:num_queue_reqs{__SCOPE__}[1m]))'
+      target: "5"
+  scaleDown:
+    behavior: CacheAware
+    # A cold start on a 35B model is expensive, so do not shrink on a brief dip.
+    stabilizationWindowSeconds: 300
+    # ...and give up at most one warm replica per sync period once we do shrink.
+    maxStepReplicas: 2
+    deletionCostQuery: 'sglang:token_usage{__SCOPE__} * 100'
+
+serviceMonitor:
+  enabled: true
+  path: /metrics
+  interval: 15s
+  scrapeTimeout: 10s
+  labels:
+    release: kube-prometheus-stack
+  podTargetLabels:
+    - app
+
+# ---------------------------------------------------------------------------
+# Not portable from `docker run`, listed so their absence is a decision:
+#
+#   --network host   Not needed. The Service publishes port 8050; hostNetwork
+#                    would only be required to bypass it, and it breaks the
+#                    per-pod IP that EndpointSlice-based draining relies on.
+#
+#   --ipc=host       Approximated by the /dev/shm emptyDir above. True host IPC
+#                    needs `hostIPC: true` in the pod spec, which this chart does
+#                    not expose; the shared-memory size is the part that matters
+#                    for torch. Raise sizeLimit if TP workers hit shm errors.
+#
+#   --ulimit memlock=-1
+#   --ulimit stack=67108864
+#                    A Pod spec has no ulimit field. These are set on the
+#                    container runtime / kubelet (e.g. containerd's
+#                    default_ulimits), not per workload.
+#
+# Also note the entrypoint differs in form only: the script runs `sglang serve`,
+# the chart runs `python3 -m sglang.launch_server`. Both exist in v0.5.15 and
+# start the same server; the chart uses the module form because it is the
+# long-stable one.
+# ---------------------------------------------------------------------------
