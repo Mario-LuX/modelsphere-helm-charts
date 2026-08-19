@@ -23,7 +23,7 @@
   same things at render time and points at the values key to fix.
 */}}
 {{- $mr := .Values.modelRoute }}
-{{- $ownSvc := printf "%s/%s-vllm-svc" .Release.Namespace .Release.Name }}
+{{- $ownSvc := printf "%s/%s" .Release.Namespace .Release.Name }}
 
 {{- /* Is there a CART in this route? cart.enabled is the whole answer, and the
        only switch: it deploys the CART (the vendored subchart in charts/cart)

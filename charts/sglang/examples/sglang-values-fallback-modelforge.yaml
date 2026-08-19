@@ -20,6 +20,28 @@ model:
   # the model's own. Setting a number here would silently cap a 35B model.
   contextLength: ""
 
+cart:
+  enabled: true
+
+modelRoute:
+  enabled: true
+  nginx:
+    outputConfigMap: "llm-route/openresty-conf"
+    service: "llm-route/openresty"
+    route: "fallback-modelforge-0.1"
+    values:
+      default_max: "50"
+      kimi_normalize_default_enabled: "false"
+      tps_limit_tps: "30"
+      ttft_limit_ms: "20000"
+  cart:
+    maxLoad: 100
+  monitor:
+    enabled: true
+    gpuType: H100
+    model: fallback-modelforge-0.1
+    outputConfigMap: monitoring/monitor-conf
+
 # Assert both halves of the checkpoint, not just the metadata.
 #
 # config.json is safe to require: the script looks one level deep, and SGLang

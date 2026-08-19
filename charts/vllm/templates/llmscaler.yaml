@@ -2,14 +2,14 @@
 apiVersion: autoscaling.4pd.io/v1alpha1
 kind: LLMScaler
 metadata:
-  name: {{ .Release.Name }}-scaler
+  name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
 spec:
   syncPeriodSeconds: {{ .Values.scaler.syncPeriodSeconds }}
   targetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ .Release.Name }}-vllm
+    name: {{ .Release.Name }}
   {{- if .Values.metricsMock.enabled }}
   # Driven by the metrics-mock (returns a fixed value) to simulate scaling.
   serverAddress: "http://{{ .Release.Name }}-metrics-mock.{{ .Release.Namespace }}:9090"
