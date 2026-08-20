@@ -111,6 +111,38 @@ livenessProbe:
   # restarted. Only a genuinely wedged process should fail this many times.
   failureThreshold: 6
 
+# Hang-detection sidecar: reads this pod's vLLM /metrics, serves /healthz
+# (200/503), and takes over the engine's livenessProbe (503 -> kubelet restarts
+# the engine). Reports only -- no k8s API / RBAC. Deeper than /health: watches
+# token_progress stalling, which a wedged scheduler (CUDA/NCCL) still hides from
+# /health. vLLM exposes /metrics by default. startupProbe still gates model load.
+hangWatcher:
+  enabled: true              # default on; false = fall back to the engine's own livenessProbe, drop the sidecar (e.g. image unreachable)
+  image:
+    repository: "harbor.4pd.io/hardcore-tech/hang-watcher"
+    tag: "0.1.10"
+  port: 9090                 # /healthz port (just needs to differ from service.port)
+  # Thresholds -> ConfigMap the sidecar hot-reloads (helm upgrade retunes, no pod restart).
+  config:
+    pollIntervalSec: 15
+    stallSec: 180            # how long token_progress may freeze before a hang; keep above the longest legit stall (big prefill). Mirrors monitor GRACE.
+    metricsTimeoutSec: 10
+    # Active confirmation: once token_progress has frozen past stallSec, probe the engine --
+    # 2xx = alive (no hang), timeout = confirmed hang. Default POST /v1/completions (real
+    # inference path, catches a wedged scheduler that still answers /health,/v1/models);
+    # empty body -> chart fills it from model.name.
+    activeProbeEnabled: true
+    activeProbePath: /v1/completions
+    activeProbeMethod: POST
+    activeProbeBody: ""
+    activeProbeTimeoutSec: 60
+  livenessProbe:             # merged onto the engine container (3 x 15s = 45s of 503 before restart)
+    periodSeconds: 15
+    failureThreshold: 3
+  resources:
+    requests: { cpu: "10m", memory: "16Mi" }
+    limits:   { cpu: "100m", memory: "64Mi" }
+
 # Graceful shutdown / cache-aware scale-down draining.
 #
 # A pod being deleted goes through two stages, and both come out of the same

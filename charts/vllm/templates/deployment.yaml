@@ -221,15 +221,58 @@ spec:
         readinessProbe:
           {{- toYaml . | nindent 10 }}
         {{- end }}
+        {{- if .Values.hangWatcher.enabled }}
+        # hang-watcher owns liveness: probe the sidecar's /healthz on the shared
+        # pod network; a 503 (hang) restarts THIS container. Replaces the default
+        # livenessProbe -- see hangWatcher in values.yaml for why.
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: {{ .Values.hangWatcher.port }}
+          {{- with .Values.hangWatcher.livenessProbe }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
+        {{- else }}
         {{- with .Values.livenessProbe }}
         livenessProbe:
           {{- toYaml . | nindent 10 }}
         {{- end }}
+        {{- end }}
+      {{- if .Values.hangWatcher.enabled }}
+      # Hang-detection sidecar (see hangWatcher in values.yaml). Reads this pod's
+      # own vLLM /metrics over localhost and serves /healthz for the engine's
+      # livenessProbe above. Reports only; the kubelet does the restart. No RBAC.
+      - name: hang-watcher
+        image: "{{ .Values.hangWatcher.image.repository }}:{{ .Values.hangWatcher.image.tag }}"
+        env:
+        - name: ENGINE_URL
+          value: "http://127.0.0.1:{{ .Values.service.port }}"
+        - name: LISTEN
+          value: ":{{ .Values.hangWatcher.port }}"
+        - name: CONFIG_FILE
+          value: /etc/hang-watcher/config.json
+        ports:
+        - containerPort: {{ .Values.hangWatcher.port }}
+          name: hang-hz
+        volumeMounts:
+        - name: hang-watcher-config
+          mountPath: /etc/hang-watcher
+          readOnly: true
+        {{- with .Values.hangWatcher.resources }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      {{- end }}
       volumes:
       - name: model-storage
         hostPath:
           path: {{ .Values.model.localPath }}
           type: {{ .Values.model.hostPathType }}
+      {{- if .Values.hangWatcher.enabled }}
+      - name: hang-watcher-config
+        configMap:
+          name: {{ .Release.Name }}-hang-watcher
+      {{- end }}
       {{- with .Values.volumes }}
       {{- toYaml . | nindent 6 }}
       {{- end }}
