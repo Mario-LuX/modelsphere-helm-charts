@@ -1,0 +1,31 @@
+{{- if .Values.hangWatcher.enabled }}
+# Thresholds for the hang-watcher sidecar, mounted at /etc/hang-watcher. The
+# sidecar hot-reloads this on mtime change, so `helm upgrade` retunes it in place
+# without a pod restart. Keys are the sidecar's own (snake_case); values come
+# from hangWatcher.config in values.yaml.
+{{- $c := .Values.hangWatcher.config }}
+{{- /* Default the probe body to a 1-token /v1/completions for this model when it
+       is left empty and the method is POST. GET probes keep an empty body. */}}
+{{- $body := $c.activeProbeBody }}
+{{- if and (not $body) (eq (upper $c.activeProbeMethod) "POST") }}
+{{- $body = printf `{"model":"%s","prompt":"ping","max_tokens":1,"stream":false}` .Values.model.name }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-hang-watcher
+  labels:
+    app: {{ .Release.Name }}-vllm
+data:
+  config.json: |
+    {
+      "poll_interval_sec": {{ $c.pollIntervalSec }},
+      "stall_sec": {{ $c.stallSec }},
+      "metrics_timeout_sec": {{ $c.metricsTimeoutSec }},
+      "active_probe_enabled": {{ $c.activeProbeEnabled }},
+      "active_probe_path": {{ $c.activeProbePath | quote }},
+      "active_probe_method": {{ $c.activeProbeMethod | quote }},
+      "active_probe_body": {{ $body | toJson }},
+      "active_probe_timeout_sec": {{ $c.activeProbeTimeoutSec }}
+    }
+{{- end }}
