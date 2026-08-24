@@ -63,9 +63,15 @@ metadata:
 spec:
   syncPeriodSeconds: {{ $s.syncPeriodSeconds }}
   targetRef:
+    {{- if .Values.lws.enabled }}
+    apiVersion: leaderworkerset.x-k8s.io/v1
+    kind: LeaderWorkerSet
+    name: {{ include "sglang.lwsName" . }}
+    {{- else }}
     apiVersion: apps/v1
     kind: Deployment
     name: {{ include "sglang.fullname" . }}
+    {{- end }}
   # Emitted rather than left to the CRD default, so the CR says outright which of
   # the two signal sources is in play -- that choice is what decides whether
   # serverAddress below is a query API or a decision server.

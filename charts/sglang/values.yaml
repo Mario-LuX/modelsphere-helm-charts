@@ -21,6 +21,96 @@ fullnameOverride: ""
 # the starting count comes from scaler.minReplicas instead.
 replicaCount: 1
 
+# Multi-node: one model instance spread across several nodes, as a
+# LeaderWorkerSet (leaderworkerset.x-k8s.io/v1) instead of a Deployment. For a
+# model whose weights do not fit in one node's GPUs -- the group is the unit
+# that loads the model, scales and restarts, because half a model serves
+# nothing.
+#
+# Requires the LWS controller in the cluster (`kubectl get crd
+# leaderworkersets.leaderworkerset.x-k8s.io`); without it the install fails with
+# "no matches for kind LeaderWorkerSet".
+#
+# Turning this on swaps out the workload, not the rest of the chart. The Service,
+# ServiceMonitor, ModelRoute, hang-watcher ConfigMap and CART are all rendered
+# exactly as before, and the Service simply narrows its selector to the leader
+# pods (role: leader), which are the only ones that serve: SGLang starts its HTTP
+# server on rank 0 only. So a ModelRoute, a CART and Prometheus scraping keep
+# working with no extra configuration.
+#
+# The LLMScaler works here too: scaler.targetRef follows the workload to the
+# LeaderWorkerSet, which has its own /scale subresource. What changes is the unit
+# it counts -- one replica is a whole GROUP (lws.size pods, one model instance),
+# so scaler.minReplicas/maxReplicas are group counts and a scale step costs
+# lws.size nodes' worth of GPUs.
+#
+# The parallelism itself is NOT configured here. --nnodes, --node-rank and
+# --dist-init-addr are derived from the group (see _pod.tpl); how the resulting
+# GPUs are carved up -- --tp, --pp-size, --ep-size -- goes in extraArgs, and
+# restating the derived three there is refused rather than silently ignored.
+#
+# A worked example, mirroring a live 2-node H100 deployment (RDMA, hang-watcher,
+# NCCL env, shm), is in examples/sglang-values-lws-multinode.yaml.
+lws:
+  enabled: false
+  # Pods per group -- i.e. nodes per model instance, and what the chart passes as
+  # --nnodes. The leader is one of them, so 2 means one leader + one worker.
+  # model.gpus is still PER POD, so a --tp of 16 over 2 nodes means gpus: "8"
+  # here and --tp=16 in extraArgs.
+  size: 2
+  # Number of GROUPS, each a complete model instance of `size` pods. This is the
+  # knob that replicaCount is for a Deployment; total pods = replicas x size.
+  #
+  # Only used when scaler.enabled is false. With the scaler on, the chart omits
+  # spec.replicas entirely so the operator can own it (see lws.yaml), and the
+  # starting count comes from scaler.minReplicas instead.
+  replicas: 1
+  # The port workers reach the leader on for the initial NCCL/torch.distributed
+  # rendezvous (--dist-init-addr). Pod-to-pod inside the group, never served --
+  # it only has to be free in the container and differ from service.port.
+  distPort: 29500
+  # LeaderCreated starts the workers only once the leader pod exists, so the
+  # rendezvous address is resolvable before anything dials it. LeaderReady waits
+  # further, for the leader to pass its probes -- which here means waiting for a
+  # port that only binds AFTER the workers have joined, i.e. a deadlock. Leave
+  # this alone unless the probes above change shape.
+  startupPolicy: LeaderCreated
+  # A group is one model instance: a member that restarts has dropped out of the
+  # NCCL communicator, and the rest cannot re-form it on their own. Recreate the
+  # whole group instead of leaving it half-alive.
+  restartPolicy: RecreateGroupOnPodRestart
+  # DNS for the group. Shared puts every group under one headless Service, which
+  # is all the intra-group rendezvous needs. UniquePerReplica gives each group its
+  # own -- only useful if something outside has to address one group by name.
+  subdomainPolicy: Shared
+  # Rendered verbatim as spec.rolloutStrategy.
+  #
+  # maxSurge: 0 is the honest default for GPUs: a surge needs a whole spare
+  # GROUP's worth of idle GPUs (size x model.gpus) to exist, and on a full
+  # cluster the new group would sit Pending forever while the old one keeps its
+  # GPUs. 0 retires a group first and rebuilds in place -- a real gap in service
+  # per group, but a bounded one. Raise it to 1 only where the spare capacity
+  # actually exists.
+  rolloutStrategy:
+    type: RollingUpdate
+    rollingUpdateConfiguration:
+      maxSurge: 0
+      maxUnavailable: 1
+  # Have the leader's preStop hook SIGKILL PID 1 once it has drained.
+  #
+  # LWS deletes the leader FIRST when it tears a group down, so SGLang's own
+  # post-SIGTERM drain blocks inside a cross-node collective its still-running
+  # workers will never join: PID 1 wedges, and the pod burns the entire
+  # terminationGracePeriodSeconds holding its GPUs before the kubelet SIGKILLs
+  # it -- which on a full cluster is exactly what the replacement group is
+  # waiting on. Killing PID 1 after the drain moves that SIGKILL from "grace
+  # period expired" to "drain finished".
+  #
+  # Turn it off only if you have removed the reason for it (a single-node group,
+  # or an SGLang that no longer blocks there); the cost of it being on is a 137
+  # exit code on a pod that is being deleted anyway.
+  leaderPreStopKill: true
+
 image:
   repository: "lmsysorg/sglang"
   tag: "latest"
@@ -277,14 +367,6 @@ scaler:
     - name: queue-depth
       query: 'avg(avg_over_time(sglang:num_queue_reqs{__SCOPE__}[1m]))'
       target: "5"
-  # Cache-aware scale-down. deletionCostQuery is a PromQL instant query that
-  # returns one series per pod (carrying a "pod" label); its value becomes that
-  # pod's controller.kubernetes.io/pod-deletion-cost (lower = deleted first), so
-  # colder pods should yield lower numbers. Evaluated against serverAddress at
-  # scale-down time. Leave empty to use the built-in newest-pod-first heuristic.
-  # Keep empty when metricsMock is enabled (the mock has no per-pod "pod" label).
-  # Being PromQL, it is dropped under the Custom provider -- serverAddress is a
-  # decision server with no query API there, so the heuristic is used regardless.
   scaleDown:
     behavior: CacheAware
     # Hold at the highest recommendation over this window before scaling down, so
@@ -525,6 +607,11 @@ volumeMounts: []
   # - name: shm
   #   mountPath: /dev/shm
 
+# Do not set nvidia.com/gpu here -- model.gpus renders it, and the chart refuses
+# a second spelling rather than let the two drift. Other extended resources do
+# belong here, e.g. an RDMA device from the shared-device plugin:
+#
+#   limits: { rdma/hca_shared: "1" }
 resources: {}
   # requests:
   #   cpu: "8"
@@ -534,6 +621,45 @@ resources: {}
   #   memory: 96Gi
   #   ephemeral-storage: 20Gi
 
+# securityContext for the SGLang container. Empty means the image's own.
+#
+# The one that matters for multi-node on an IB fabric is IPC_LOCK: without it
+# the container cannot raise its locked-memory limit, so the `ulimit -l
+# unlimited` the lws command form runs is a no-op and the RDMA driver cannot pin
+# its buffers. It is a single capability, not privileged mode:
+#
+#   securityContext:
+#     capabilities:
+#       add: ["IPC_LOCK"]
+securityContext: {}
+
+# Extra labels on the pods (not on the Deployment/LWS object, and never on the
+# Deployment's selector, which is immutable). Applied to every pod the chart
+# makes -- LWS leader and worker alike, which is what you want for anything a
+# webhook keys off.
+#
+# The reason this exists: rdma-injector (charts/rdma-injector) watches for
+#
+#   podLabels:
+#     rdma-ib: "true"
+#
+# and injects the per-node RDMA environment -- the /etc/gpu-node hostPath plus a
+# `source` of nccl-ib.env, which resolves NCCL_IB_HCA to the HCAs that are
+# actually healthy ON THAT NODE. That value cannot be written into this chart:
+# at admission the pod is not scheduled yet, so nobody knows which node's answer
+# applies.
+#
+# Note it only injects the `source` into containers started through a shell,
+# which under lws.enabled is exactly what the engine gets. A single-node
+# Deployment pod runs the engine in exec form and would receive the mount
+# without the source -- meaning NCCL_IB_HCA never gets set. That is not a real
+# gap (one node needs no fabric between GPUs) but do not read a labelled
+# Deployment pod as RDMA-enabled.
+podLabels: {}
+
+# Deployment-only, all three: under lws.enabled the rollout is
+# lws.rolloutStrategy instead, and a LeaderWorkerSet has neither a progress
+# deadline to blow nor ReplicaSets to keep.
 strategy:
   type: RollingUpdate
   rollingUpdate:

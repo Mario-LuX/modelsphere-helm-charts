@@ -29,3 +29,47 @@
 {{- define "sglang.fullname" -}}
 {{- .Values.fullnameOverride | default .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
+
+{{/*
+  The LeaderWorkerSet's name, when lws.enabled.
+
+  It cannot simply be sglang.fullname: the LWS controller creates a headless
+  Service named after the LWS object (that is what gives the pods their DNS
+  subdomain and what LWS_LEADER_ADDRESS resolves through), and this chart already
+  owns a Service under that exact name. Two controllers writing one Service is
+  not a name clash Helm can warn about -- the LWS one would either fail to be
+  created or fight the chart's over the selector. The suffix keeps them apart, so
+  the stable ClusterIP that ModelRoute, the ServiceMonitor and openresty all
+  point at stays the chart's own.
+*/}}
+{{- define "sglang.lwsName" -}}
+{{- printf "%s-lws" (include "sglang.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/*
+  Everything the shutdown does has to fit inside terminationGracePeriodSeconds.
+  That timer starts when the pod is marked Terminating and covers BOTH the
+  preStop hook and SGLang's own drain after SIGTERM. If the total is too big the
+  kubelet kills the pod while requests are still running, so fail here rather
+  than ship a config that quietly drops them.
+
+  Note this check is a FLOOR, not a guarantee: SGLang's post-SIGTERM drain has
+  no timeout of its own, so shutdownReserveSeconds only covers its fixed tail
+  (5s drain re-check + up to 15s for schedulers to exit). A generation longer
+  than the reserve is still cut off. Keep the real draining in drainSeconds,
+  where it is bounded and can end early.
+
+  Renders nothing -- it either fails the release or gets out of the way. Both
+  the Deployment and the LeaderWorkerSet call it, because both carry the same
+  preStop hook and the same grace period.
+*/}}
+{{- define "sglang.shutdownBudget" -}}
+{{- $preStop := .Values.lifecycle.preStop -}}
+{{- $budget := int .Values.lifecycle.shutdownReserveSeconds -}}
+{{- if $preStop.enabled -}}
+{{- $budget = add $budget (int $preStop.endpointSyncSeconds) (int $preStop.drainSeconds) -}}
+{{- end -}}
+{{- if gt (int $budget) (int .Values.terminationGracePeriodSeconds) -}}
+{{- fail (printf "sglang: terminationGracePeriodSeconds (%d) is smaller than the shutdown budget (%d = preStop endpointSyncSeconds %d + drainSeconds %d + lifecycle.shutdownReserveSeconds %d); the pod would be SIGKILLed mid-drain" (int .Values.terminationGracePeriodSeconds) (int $budget) (int $preStop.endpointSyncSeconds) (int $preStop.drainSeconds) (int .Values.lifecycle.shutdownReserveSeconds)) -}}
+{{- end -}}
+{{- end -}}

@@ -1,0 +1,119 @@
+{{- if .Values.lws.enabled -}}
+{{/*
+  LeaderWorkerSet (leaderworkerset.x-k8s.io/v1) -- the multi-node form of this
+  chart's workload, replacing the Deployment when lws.enabled. Requires the LWS
+  controller; without its CRD the install fails with "no matches for kind
+  LeaderWorkerSet".
+
+  The unit here is the GROUP, not the pod: `size` pods hold ONE model instance
+  between them, one of them the leader (rank 0, the only one that serves HTTP)
+  and the rest workers. A group scales, rolls and restarts as a whole, because
+  a partial group holds a partial model and serves nothing.
+
+  What the chart derives, and therefore what nobody restates:
+
+    --nnodes         is lws.size          -- the group IS the instance
+    --node-rank      is the pod's index   -- 0 on the leader, ${LWS_WORKER_INDEX}
+                                             on a worker
+    --dist-init-addr is ${LWS_LEADER_ADDRESS}:lws.distPort
+
+  How the group's GPUs are then carved up (--tp, --pp-size, --ep-size, ...) is
+  model-specific and belongs in extraArgs; the check below refuses the three
+  above there rather than let two sources of truth disagree.
+
+  Both pod specs come from the same helper as the Deployment's (_pod.tpl), so
+  leader and worker cannot drift on image, model volume, resources or
+  scheduling -- a mismatch there does not fail at render time, it fails minutes
+  later as a NCCL timeout that reads like a network fault.
+*/}}
+{{- include "sglang.shutdownBudget" . }}
+{{- $lws := .Values.lws }}
+
+{{- if lt (int $lws.size) 2 }}
+{{- fail (printf "sglang: lws.size is %v -- a group of one is a single-node deployment with extra machinery (and SGLang would still be told --nnodes=1). Set lws.size >= 2, or turn lws.enabled off and use the Deployment, which is what replicaCount and the LLMScaler work with" $lws.size) }}
+{{- end }}
+
+{{- /* `role` is not a free label here: it is the whole difference between a pod
+       the Service routes to and one it does not. Overwriting it would either
+       empty the EndpointSlice (no backends) or put workers in it (traffic to a
+       port nothing is listening on). */}}
+{{- if hasKey (.Values.podLabels | default dict) "role" }}
+{{- fail "sglang: podLabels cannot set `role` under lws.enabled -- the chart uses role=leader/worker to tell the group apart, and the Service selects role: leader. Pick another key" }}
+{{- end }}
+
+{{- /* Not a style objection: a duplicate wins by being last on SGLang's command
+       line, so an extraArgs --node-rank would override the per-pod rank the
+       chart just derived and silently give every pod in the group the same one. */}}
+{{- range $arg := .Values.extraArgs }}
+{{- range $derived := list "--nnodes" "--node-rank" "--dist-init-addr" }}
+{{- if hasPrefix $derived (toString $arg) }}
+{{- fail (printf "sglang: extraArgs carries %q, which lws.enabled already derives from the group (nnodes=lws.size, node-rank per pod, dist-init-addr from the leader). SGLang takes the LAST occurrence of a repeated flag, so this would override the per-pod value -- give every pod rank 0, say. Drop it; put only the parallelism layout (--tp, --pp-size, ...) in extraArgs" $arg) }}
+{{- end }}
+{{- end }}
+{{- end }}
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  {{- /* Deliberately NOT sglang.fullname: the LWS controller creates a headless
+         Service under its own name for the group's DNS, and this chart's Service
+         already holds that name. See sglang.lwsName. */}}
+  name: {{ include "sglang.lwsName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Release.Name }}-sglang
+spec:
+  {{- if not .Values.scaler.enabled }}
+  # Groups, not pods: total pods = replicas x size.
+  replicas: {{ $lws.replicas }}
+  {{- else }}
+  # replicas is deliberately ABSENT while the LLMScaler is enabled, for the same
+  # reason it is on the Deployment: the controller writes spec.replicas here (the
+  # LWS exposes /scale, and scaler.targetRef points at this object), which makes
+  # it the server-side-apply owner of that field. A chart that also declared it
+  # would fight for ownership on every `helm upgrade`.
+  #
+  # The starting GROUP count therefore comes from scaler.minReplicas on the first
+  # reconcile, not from lws.replicas -- and each of those groups is lws.size pods.
+  {{- end }}
+  # Workers wait for the leader pod to exist, so the rendezvous address they are
+  # about to dial resolves. (Not LeaderReady, which would wait for probes on a
+  # port that only binds once the workers have joined -- a deadlock.)
+  startupPolicy: {{ $lws.startupPolicy }}
+  networkConfig:
+    subdomainPolicy: {{ $lws.subdomainPolicy }}
+  {{- with $lws.rolloutStrategy }}
+  # See lws.rolloutStrategy in values.yaml for why maxSurge defaults to 0 here
+  # and not to the Deployment's 1.
+  rolloutStrategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  leaderWorkerTemplate:
+    # Pods per group, INCLUDING the leader -- and what the engine gets as --nnodes.
+    size: {{ $lws.size }}
+    # One member restarting has dropped out of the NCCL communicator and the
+    # others cannot re-form it around the newcomer; take the group down together.
+    restartPolicy: {{ $lws.restartPolicy }}
+    leaderTemplate:
+      metadata:
+        labels:
+          app: {{ .Release.Name }}-sglang
+          # What the chart's Service selects on: the leader is the only pod
+          # running an HTTP server, so it is the only endpoint. Workers carry
+          # role: worker and are deliberately not selectable as backends.
+          role: leader
+          {{- with .Values.podLabels }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
+      spec:
+        {{- include "sglang.podSpec" (dict "root" . "role" "leader") | nindent 8 }}
+    workerTemplate:
+      metadata:
+        labels:
+          app: {{ .Release.Name }}-sglang
+          role: worker
+          {{- with .Values.podLabels }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
+      spec:
+        {{- include "sglang.podSpec" (dict "root" . "role" "worker") | nindent 8 }}
+{{- end -}}

@@ -1,0 +1,213 @@
+# Multi-node SGLang via LeaderWorkerSet -- Kimi K2.5 on 2x H100 nodes (TP8 x PP2),
+# RDMA over InfiniBand. This is the chart form of a live deployment (the
+# hand-written manifest it was ported from is kimi-k2.5/kimi-lws.yaml in the
+# inference-stack-k8s repo); consult the real GitOps repo for deploy values.
+#
+#   helm install kimi-k25 ./charts/sglang -n kimi -f examples/sglang-values-lws-multinode.yaml
+#
+# Prerequisites in the cluster, none of which this chart installs:
+#   - the LWS controller (CRD leaderworkersets.leaderworkerset.x-k8s.io)
+#   - rdma-shared-dev-plugin, for the rdma/hca_shared resource below
+#   - node_prep_rdma.sh having written /etc/gpu-node/nccl-ib.env on each GPU node
+#   - rdma-injector (charts/rdma-injector), which turns the rdma-ib label below
+#     into that file being mounted and sourced -- so NCCL_IB_HCA is never
+#     written here: at admission the pod is not scheduled yet, and the healthy
+#     HCAs are a per-node answer.
+#   - the model already on both nodes at model.localPath
+
+lws:
+  enabled: true
+  # 2 nodes per instance. One leader (rank 0, serves the API) + one worker.
+  size: 2
+  # Not used here: the scaler below owns spec.replicas, so the group count starts
+  # at scaler.minReplicas. Set it only with scaler.enabled: false.
+  replicas: 2
+
+# The LLMScaler targets the LeaderWorkerSet (its /scale subresource), so a
+# replica below is a whole 2-pod GROUP: max 2 means at most 4 pods / 32 GPUs.
+#
+# Custom provider -- the count comes off the decision server, and the PromQL
+# metrics block is not read at all.
+scaler:
+  enabled: true
+  metricProvider: Custom
+  serverAddress: "http://decision-gen.llm-scaler.svc:80"
+  customProvider:
+    serviceId: "kimi-k25"
+    path: "/decisions"
+    # The server reports this serviceId in more than one namespace, so the match
+    # has to be narrowed or it is an error rather than a choice.
+    namespace: "kimi"
+  minReplicas: 1
+  maxReplicas: 2
+  syncPeriodSeconds: 10
+  scaleDown:
+    behavior: CacheAware
+    # A group is 2 nodes and a ~10 minute cold load; do not let a brief dip take
+    # one down.
+    stabilizationWindowSeconds: 300
+    maxStepReplicas: 2
+
+image:
+  repository: "harbor.4pd.io/hardcore-tech/sglang"
+  tag: "v0.5.10.post1-gm-fix-v0.1"
+
+model:
+  name: "kimi-k2.5"
+  localPath: "/mnt/disk0/models/Kimi-K2.5"
+  mountPath: "/model"
+  # PER POD, not per group: 8 GPUs on each of the 2 nodes, which is what
+  # --tp=8 --pp-size=2 below then spans.
+  gpus: "8"
+  # Let SGLang use the model's own -- pinning a number here would cap K2.5.
+  contextLength: ""
+
+# The parallelism layout, and only that: --nnodes, --node-rank and
+# --dist-init-addr come from the group and are rejected here.
+#
+# TP inside a node (NVLink), PP across the two (the IB fabric) -- the split that
+# keeps the all-reduce traffic off the slower link.
+extraArgs:
+  - "--tp=8"
+  - "--pp-size=2"
+  - "--trust-remote-code"
+  - "--enable-cache-report"
+  - "--stream-response-default-include-usage"
+  - "--tokenizer-worker-num=4"
+  - "--tool-call-parser=kimi_k2"
+  - "--reasoning-parser=kimi_k2"
+
+service:
+  port: 8050
+
+# Triggers rdma-injector on every pod of every group. See the prerequisites above.
+podLabels:
+  rdma-ib: "true"
+
+# IPC_LOCK, not privileged: it is what lets the container raise its
+# locked-memory limit (the `ulimit -l unlimited` the chart runs before exec'ing
+# SGLang) so the RDMA driver can pin its buffers.
+securityContext:
+  capabilities:
+    add: ["IPC_LOCK"]
+
+# One shared HCA per pod, from rdma-shared-dev-plugin. nvidia.com/gpu is NOT
+# here on purpose -- model.gpus renders it.
+resources:
+  limits:
+    rdma/hca_shared: "1"
+
+env:
+  - { name: NCCL_DEBUG, value: "WARN" }
+  - { name: NCCL_IB_DISABLE, value: "0" }
+  # GPUDirect RDMA when the GPU and the HCA are close enough on the PCIe tree.
+  - { name: NCCL_NET_GDR_LEVEL, value: "2" }
+  # No hostNetwork, so the pod's eth0 (Flannel) is the constant name for the
+  # out-of-band path: NCCL's bootstrap and Gloo both use it. The IB path is
+  # separate and comes from NCCL_IB_HCA, which the injector sets per node.
+  - { name: NCCL_SOCKET_IFNAME, value: "eth0" }
+  - { name: GLOO_SOCKET_IFNAME, value: "eth0" }
+  - { name: PYTORCH_ALLOC_CONF, value: "expandable_segments:True" }
+  - { name: NVIDIA_DISABLE_REQUIRE, value: "1" }
+
+# NCCL needs real shared memory for its intra-node transport; the default 64MB
+# /dev/shm is not enough. emptyDir (per pod), never hostPath -- concurrent pods
+# sharing one would corrupt each other.
+volumes:
+  - name: dshm
+    emptyDir:
+      medium: Memory
+      sizeLimit: 16Gi
+  - name: cache
+    hostPath:
+      path: /root/deploy/kimi-k2.5/.cache_sglang_k8s
+      type: DirectoryOrCreate
+volumeMounts:
+  - name: dshm
+    mountPath: /dev/shm
+  - name: cache
+    mountPath: /root/.cache
+
+# Probes hit /v1/models rather than /health, from experience on this build:
+# SGLang v0.5.10's /health answers 503 for a second or two after load finishes,
+# and its meaning is not purely "model is up" (it can reflect backpressure).
+# /v1/models is 200 from the moment the route binds and stays there.
+#
+# On the leader that bind is also the group's readiness signal: the port only
+# comes up once the model is loaded AND the cross-node NCCL group has formed, so
+# a 200 here means the whole instance is serving, worker included. Workers are
+# not probed at all -- they run no HTTP server.
+startupProbe:
+  httpGet:
+    path: /v1/models
+    port: http
+  periodSeconds: 15
+  timeoutSeconds: 10
+  # 80 x 15s = 20 minutes for a cold load of a model this size across two nodes.
+  # Liveness and readiness stay suppressed for all of it.
+  failureThreshold: 80
+readinessProbe:
+  httpGet:
+    path: /v1/models
+    port: http
+  initialDelaySeconds: 60
+  periodSeconds: 15
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Liveness is the hang-watcher sidecar's /healthz (chart default), which is what
+# makes a liveness probe safe on a model that takes ~10 minutes to load: the
+# sidecar distinguishes "still loading" from "token_progress has stalled", so
+# only a real hang restarts the leader -- and RecreateGroupOnPodRestart then
+# rebuilds the group around it.
+hangWatcher:
+  enabled: true
+  config:
+    # A long prefill on K2.5 can legitimately freeze token_progress for a while;
+    # stay well above the longest one you expect.
+    stallSec: 300
+
+# Long generations, so allow a long drain. Note what this number is: SGLang's
+# post-SIGTERM drain has no timeout of its own, so this is the deadline that
+# CUTS IT OFF, not a budget it stays inside.
+terminationGracePeriodSeconds: 3600
+lifecycle:
+  preStop:
+    enabled: true
+    endpointSyncSeconds: 5
+    # The bounded drain -- the pod leaves as soon as it goes idle, and after this
+    # the leader kills PID 1 (lws.leaderPreStopKill) rather than let SIGTERM find
+    # SGLang blocked in a collective its workers will never join.
+    drainSeconds: 600
+
+# Both nodes of a group must be the same H100 SKU on the same driver: a
+# mismatched driver across a NCCL group fails at rendezvous, minutes in.
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: nvidia.com/gpu.product
+              operator: In
+              values: ["NVIDIA-H100-80GB-HBM3"]
+            - key: nvidia.com/cuda.driver-version.full
+              operator: In
+              values: ["575.57.08"]
+
+# Routing works exactly as it does for a single-node release: the chart's
+# Service selects the leaders, so these point at "the model" without knowing
+# there is a group behind it.
+cart:
+  enabled: true
+modelRoute:
+  enabled: false
+  # name: "kimi-k2.5"
+  # nginx:
+  #   outputConfigMap: "llm-route/openresty-conf"
+  #   service: "llm-route/openresty"
+  # cart:
+  #   maxLoad: 50
+  # monitor:
+  #   enabled: true
+  #   outputConfigMap: "monitoring/monitor-conf"
+  #   gpuType: H100
