@@ -19,9 +19,6 @@ lws:
   enabled: true
   # 2 nodes per instance. One leader (rank 0, serves the API) + one worker.
   size: 2
-  # Not used here: the scaler below owns spec.replicas, so the group count starts
-  # at scaler.minReplicas. Set it only with scaler.enabled: false.
-  replicas: 2
 
 # The LLMScaler targets the LeaderWorkerSet (its /scale subresource), so a
 # replica below is a whole 2-pod GROUP: max 2 means at most 4 pods / 32 GPUs.
@@ -186,10 +183,7 @@ volumes:
       medium: Memory
       sizeLimit: 16Gi
   - name: dot-cache
-    emptyDir:
-      # Stays under resources.limits.ephemeral-storage above (28Gi), which is the
-      # pod's TOTAL -- this cache plus the writable layer plus logs.
-      sizeLimit: 20Gi
+    hostPath: { path: /root/deploy/kimi-k2.5/.cache_sglang_k8s, type: DirectoryOrCreate }
 volumeMounts:
   - name: dshm
     mountPath: /dev/shm
@@ -268,14 +262,20 @@ affinity:
 cart:
   enabled: true
 modelRoute:
-  enabled: false
-  # name: "kimi-k2.5"
-  # nginx:
-  #   outputConfigMap: "llm-route/openresty-conf"
-  #   service: "llm-route/openresty"
-  # cart:
-  #   maxLoad: 50
-  # monitor:
-  #   enabled: true
-  #   outputConfigMap: "monitoring/monitor-conf"
-  #   gpuType: H100
+  enabled: true
+  name: "kimi-k2.5-green"
+  route: "kimi-k2.5-green"
+  nginx:
+    outputConfigMap: "llm-route/openresty-conf"
+    service: "llm-route/openresty"
+    values:
+      default_max: "50"
+      kimi_normalize_default_enabled: "false"
+      tps_limit_tps: "30"
+      ttft_limit_ms: "20000"
+  cart:
+    maxLoad: 50
+  monitor:
+    enabled: true
+    outputConfigMap: "monitoring/monitor-conf"
+    gpuType: H100
