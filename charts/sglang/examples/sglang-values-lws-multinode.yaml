@@ -43,8 +43,7 @@ scaler:
   syncPeriodSeconds: 10
   scaleDown:
     behavior: CacheAware
-    # A group is 2 nodes and a ~10 minute cold load; do not let a brief dip take
-    # one down.
+    # A group is 2 nodes and a ~10 minute cold load; do not let a brief dip take one down.
     stabilizationWindowSeconds: 300
     maxStepReplicas: 2
 
@@ -91,11 +90,60 @@ securityContext:
   capabilities:
     add: ["IPC_LOCK"]
 
-# One shared HCA per pod, from rdma-shared-dev-plugin. nvidia.com/gpu is NOT
-# here on purpose -- model.gpus renders it.
+# Per POD -- each of the group's 2 nodes gets this. nvidia.com/gpu is NOT here on
+# purpose: model.gpus renders it, and the chart refuses a second spelling.
+#
+# ephemeral-storage is the one worth setting even when cpu/memory are left to the
+# node, because the volumes below make it concrete: the dot-cache emptyDir can
+# reach 10Gi, and the writable layer and container logs sit on the same
+# filesystem (the one holding /var/lib/kubelet). What does NOT count: /model is a
+# hostPath, and /dev/shm is medium: Memory, so it is charged to memory instead.
+#
+# What it buys, in order of how likely it is to bite:
+#   - a request the scheduler can honour. Without one the pod is placed as if it
+#     wrote nothing, and two groups can land on a node that only has disk for one.
+#   - blast radius. Something that fills the disk -- a CUDA core dump, or
+#     NCCL_DEBUG turned up to INFO on a busy node, which is GBs per hour -- hits
+#     the node's eviction threshold and the kubelet starts evicting pods by
+#     usage, not just the guilty one. With a limit the kubelet evicts only this
+#     pod, at a line you chose.
+#
+# That matters more under LWS than it would for a Deployment: evicting a leader
+# takes the WHOLE group with it (restartPolicy: RecreateGroupOnPodRestart) and
+# costs another ~10 minute cold load, so the pod that dies should be the one
+# that misbehaved.
+#
+# Note this is NOT the same budget as the dot-cache emptyDir's own sizeLimit
+# below, and the two are not alternatives:
+#
+#   sizeLimit          caps that ONE volume. Over it -> pod evicted.
+#   ephemeral-storage  caps the pod TOTAL: that emptyDir, plus every container's
+#                      writable layer, plus container logs. Over it -> pod evicted.
+#
+# So this has to stay strictly ABOVE the cache's sizeLimit, with room for the
+# rest. Set equal (20Gi/20Gi) and a cache sitting at its own legal maximum has
+# already spent the whole pod budget: the next log line evicts the pod for the
+# total, while the cache is still legitimately under its own limit -- and the
+# sizeLimit never gets to act as the guard rail it was added to be.
+#
+# 28Gi is a starting point, not a measurement: 20Gi the cache is allowed, ~8Gi
+# for the writable layer and logs. Check it against `kubectl describe node`
+# (ephemeral-storage allocatable) and the kubelet's summary API before treating
+# it as the number.
+#
+# cpu and memory are deliberately absent: they are worth sizing from observed
+# usage rather than guessed at, and a memory limit that forgets the 16Gi tmpfs
+# below (it is charged to the container) turns a working pod into an OOMKill
+# mid-load.
 resources:
+  requests:
+    # Equal to the limit on purpose: disk is not compressible, so there is no
+    # useful "burst above the request" the way there is for cpu.
+    ephemeral-storage: 28Gi
   limits:
+    # One shared HCA per pod, from rdma-shared-dev-plugin.
     rdma/hca_shared: "1"
+    ephemeral-storage: 28Gi
 
 env:
   - { name: NCCL_DEBUG, value: "WARN" }
@@ -110,22 +158,35 @@ env:
   - { name: PYTORCH_ALLOC_CONF, value: "expandable_segments:True" }
   - { name: NVIDIA_DISABLE_REQUIRE, value: "1" }
 
-# NCCL needs real shared memory for its intra-node transport; the default 64MB
-# /dev/shm is not enough. emptyDir (per pod), never hostPath -- concurrent pods
-# sharing one would corrupt each other.
+# Both emptyDir, i.e. one per pod. The model itself stays a hostPath (read-only
+# reference data, mounted by the chart from model.localPath) -- these two are
+# things the server WRITES, and the chart's rule for those is a volume that
+# cannot be shared.
+#
+#   dshm    NCCL's intra-node transport needs real shared memory and the default
+#           64MB /dev/shm is not enough. medium: Memory, so it is tmpfs -- and
+#           charged to the container's MEMORY, not to ephemeral-storage.
+#   dot-cache  torch/CUDA compile artifacts. The hand-written manifest used a
+#           hostPath here, which on these 8-GPU nodes happens to be safe (a pod
+#           claims all 8 GPUs, so two never co-schedule) -- but that invariant is
+#           held by GPU capacity alone, and with the scaler free to add groups it
+#           is not something to lean on: two pods writing one compile cache
+#           corrupt it. The cost of emptyDir is a cold cache after every pod
+#           recreation, which a restart here pays anyway.
 volumes:
   - name: dshm
     emptyDir:
       medium: Memory
       sizeLimit: 16Gi
-  - name: cache
-    hostPath:
-      path: /root/deploy/kimi-k2.5/.cache_sglang_k8s
-      type: DirectoryOrCreate
+  - name: dot-cache
+    emptyDir:
+      # Stays under resources.limits.ephemeral-storage above (28Gi), which is the
+      # pod's TOTAL -- this cache plus the writable layer plus logs.
+      sizeLimit: 20Gi
 volumeMounts:
   - name: dshm
     mountPath: /dev/shm
-  - name: cache
+  - name: dot-cache
     mountPath: /root/.cache
 
 # Probes hit /v1/models rather than /health, from experience on this build:
