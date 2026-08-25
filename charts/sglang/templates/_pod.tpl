@@ -369,6 +369,10 @@ tolerations:
 {{- define "sglang.preStopScript" -}}
 {{- $root := .root -}}
 {{- $preStop := $root.Values.lifecycle.preStop -}}
+{{- $poll := int ($preStop.pollIntervalSeconds | default 2) -}}
+{{- /* ~30s of consecutive unreadable metrics, whatever the poll interval. */ -}}
+{{- $streak := max 3 (div 30 $poll) -}}
+{{- $streakSecs := mul $streak $poll -}}
 import time, urllib.request{{ if .kill }}, os, signal{{ end }}
 
 METRICS = "http://127.0.0.1:{{ $root.Values.service.port }}/metrics"
@@ -376,12 +380,25 @@ METRICS = "http://127.0.0.1:{{ $root.Values.service.port }}/metrics"
 # These names are SGLang's own -- vLLM calls them
 # vllm:num_requests_running / vllm:num_requests_waiting.
 BUSY = ("sglang:num_running_reqs", "sglang:num_queue_reqs")
+# Never send this at a proxy: a cluster that injects HTTP_PROXY into pods would
+# otherwise have us ask a proxy for the pod's OWN port, which it cannot reach --
+# and an unreadable /metrics reads as "no server to drain" below.
+OPEN = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
+
+
+def log(msg):
+    # PID 1's stdout, so this lands in `kubectl logs` beside the engine's own.
+    try:
+        with open("/proc/1/fd/1", "a") as f:
+            f.write("[preStop] %s\n" % msg)
+    except Exception:
+        pass
 
 
 def inflight():
     """Requests still on this pod, or None if we cannot tell."""
     try:
-        body = urllib.request.urlopen(METRICS, timeout=2).read().decode()
+        body = OPEN(METRICS, timeout=2).read().decode()
     except Exception:
         return None
     total, found = 0.0, False
@@ -403,23 +420,34 @@ def inflight():
 time.sleep({{ $preStop.endpointSyncSeconds }})
 
 # Then wait for the requests we already accepted, stopping as soon as SGLang says it is idle.
-# Anything we cannot read comes back as None, which is never == 0, so we keep waiting instead of cutting requests off early.
+# Unreadable metrics come back as None, which is never == 0, so a blip keeps us waiting rather
+# than cutting requests off early. Staying unreadable for ~{{ $streakSecs }}s is different: there is no
+# server to drain -- it never bound its port, or it has already died -- and sitting out the rest
+# of drainSeconds would only hold the GPUs while the replacement waits for them. A live server
+# is covered either way, because SIGTERM starts SGLang's own drain once this hook returns.
 deadline = time.monotonic() + {{ $preStop.drainSeconds }}
+unreadable = 0
 while time.monotonic() < deadline:
-    if inflight() == 0:
+    n = inflight()
+    if n == 0:
+        log("drained: nothing in flight")
         break
-    time.sleep({{ $preStop.pollIntervalSeconds }})
+    if n is None:
+        unreadable += 1
+        if unreadable >= {{ $streak }}:
+            log("metrics unreadable for ~{{ $streakSecs }}s -- no server to drain")
+            break
+    else:
+        unreadable = 0
+    time.sleep({{ $poll }})
+else:
+    log("drain deadline reached after {{ $preStop.drainSeconds }}s, requests may still be in flight")
 {{- if .kill }}
 
 # Drained (or out of time). Kill PID 1 rather than let SIGTERM find SGLang
 # blocked in a cross-node collective its workers will never join -- see the
-# comment above this script. Writes to PID 1's stdout first so the reason is
-# visible in `kubectl logs -p`.
-try:
-    with open("/proc/1/fd/1", "a") as f:
-        f.write("[preStop] drain finished, killing PID 1 to release the NCCL group\n")
-except Exception:
-    pass
+# comment above this script.
+log("killing PID 1 to release the NCCL group")
 os.kill(1, signal.SIGKILL)
 {{- end }}
 {{- end -}}

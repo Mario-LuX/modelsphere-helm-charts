@@ -46,17 +46,25 @@ replicaCount: 1
 #      that gives up EXITS -- which recreates the whole group, into the same
 #      race. The wait is unbounded and holds the pod's GPUs.
 #   5. all ranks meet at ${LWS_LEADER_ADDRESS}:distPort, load weights, form the
-#      NCCL communicator
+#      NCCL communicator. The LEADER's patience here is the engine's own
+#      --dist-timeout (torch's NCCL default is 600s), not the startupProbe: it
+#      has to cover the slowest worker's start, or the leader exits while
+#      waitForLeader is still doing its half of the job. Put it in extraArgs.
 #   6. the leader binds service.port, which happens only once the group is
 #      complete -- so the leader's startupProbe covers the whole group, and
-#      readiness on it means the instance is serving
+#      readiness on it means the instance is serving. Workers carry no probes
+#      (nothing listens to probe), so a worker showing READY 1/1 only means its
+#      container is running -- the group's real readiness is the leader's.
 #
 # SHUTDOWN of one group (scale-down, rolling update, or any member restarting
 # under restartPolicy: RecreateGroupOnPodRestart)
 #   1. LWS deletes the LEADER pod first  [terminationGracePeriodSeconds, ~3600]
 #      a. its endpoint is removed from the Service, in parallel with:
 #      b. preStop: wait lifecycle.preStop.endpointSyncSeconds, then poll until
-#         inflight requests reach 0, capped at drainSeconds
+#         inflight requests reach 0, capped at drainSeconds -- or until /metrics
+#         has been unreadable for ~30s, which means there is no server to drain
+#         (it never bound its port, or it already died) and waiting out the rest
+#         would only hold the GPUs
 #      c. preStop ends by SIGKILLing PID 1                [leaderPreStopKill]
 #         Currently a no-op: a process inside the container's own PID namespace
 #         cannot kill that namespace's init.
