@@ -85,8 +85,8 @@
 {{- end -}}
 {{- /* Shutdown budget: preStop + SGLang's post-SIGTERM drain, checked by
        sglang.shutdownBudget. Workers get their own, because they drain nothing
-       and their leader is already gone by then (LWS deletes them as GC after
-       it) -- a long grace only holds GPUs until the kubelet's SIGKILL. */}}
+       and their whole group is being deleted with them -- a long grace only
+       holds GPUs until the kubelet's SIGKILL. */}}
 {{- $grace := $root.Values.terminationGracePeriodSeconds }}
 {{- if and $worker $lws.workerTerminationGracePeriodSeconds }}
 {{- $grace = $lws.workerTerminationGracePeriodSeconds }}

@@ -71,12 +71,14 @@ replicaCount: 1
 #      d. SIGTERM -> SGLang's own drain -> schedulers exit; if it is wedged in a
 #         cross-node collective, the kubelet's SIGKILL at the end of the grace
 #         period is what ends it
-#   2. the worker StatefulSet is garbage collected -- LWS makes the leader POD
-#      its owner, so workers only begin terminating once the leader is gone
+#   2. the worker StatefulSet is garbage collected: its controller owner is the
+#      leader POD, so it goes once that pod object is gone. Worker teardown
+#      therefore STARTS after the leader's finishes -- the two budgets add up,
+#      they do not overlap, which is why (1) ending early matters so much.
 #   3. worker pods                    [workerTerminationGracePeriodSeconds, 60]
-#      No traffic, nothing to drain, and their leader has already exited, so
-#      SIGTERM finds them blocked in a collective with no other end. The
-#      kubelet's SIGKILL is what ends them and releases the GPUs.
+#      No traffic, nothing to drain, and the rest of the group is being deleted
+#      as well, so SIGTERM finds them in a collective that will never complete.
+#      The kubelet's SIGKILL is what ends them and releases the GPUs.
 #   4. only then can the replacement group start: same pod names, same GPUs --
 #      so (3) is what gates how quickly a group comes back
 #
