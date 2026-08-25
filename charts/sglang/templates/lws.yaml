@@ -1,25 +1,8 @@
 {{- if .Values.lws.enabled -}}
 {{/*
-  LeaderWorkerSet (leaderworkerset.x-k8s.io/v1) -- the multi-node form of this
-  chart's workload, replacing the Deployment when lws.enabled. Requires the LWS
-  controller; without its CRD the install fails with "no matches for kind
-  LeaderWorkerSet".
-
-  The unit here is the GROUP, not the pod: `size` pods hold ONE model instance
-  between them, one of them the leader (rank 0, the only one that serves HTTP)
-  and the rest workers. A group scales, rolls and restarts as a whole, because
-  a partial group holds a partial model and serves nothing.
-
-  What the chart derives, and therefore what nobody restates:
-
-    --nnodes         is lws.size          -- the group IS the instance
-    --node-rank      is the pod's index   -- 0 on the leader, ${LWS_WORKER_INDEX}
-                                             on a worker
-    --dist-init-addr is ${LWS_LEADER_ADDRESS}:lws.distPort
-
-  How the group's GPUs are then carved up (--tp, --pp-size, --ep-size, ...) is
-  model-specific and belongs in extraArgs; the check below refuses the three
-  above there rather than let two sources of truth disagree.
+  LeaderWorkerSet (leaderworkerset.x-k8s.io/v1) -- the multi-node workload, in
+  place of the Deployment. The startup and shutdown flows of a group, and which
+  value acts where, are documented under `lws` in values.yaml.
 
   Both pod specs come from the same helper as the Deployment's (_pod.tpl), so
   leader and worker cannot drift on image, model volume, resources or
@@ -54,16 +37,12 @@
 apiVersion: leaderworkerset.x-k8s.io/v1
 kind: LeaderWorkerSet
 metadata:
-  {{- /* Deliberately NOT sglang.fullname: the LWS controller creates a headless
-         Service under its own name for the group's DNS, and this chart's Service
-         already holds that name. See sglang.lwsName. */}}
-  name: {{ include "sglang.lwsName" . }}
+  name: {{ include "sglang.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
     app: {{ .Release.Name }}-sglang
 spec:
   {{- if not .Values.scaler.enabled }}
-  # Groups, not pods: total pods = replicas x size.
   replicas: {{ $lws.replicas }}
   {{- else }}
   # replicas is deliberately ABSENT while the LLMScaler is enabled, for the same
@@ -75,31 +54,21 @@ spec:
   # The starting GROUP count therefore comes from scaler.minReplicas on the first
   # reconcile, not from lws.replicas -- and each of those groups is lws.size pods.
   {{- end }}
-  # Workers wait for the leader pod to exist, so the rendezvous address they are
-  # about to dial resolves. (Not LeaderReady, which would wait for probes on a
-  # port that only binds once the workers have joined -- a deadlock.)
   startupPolicy: {{ $lws.startupPolicy }}
   networkConfig:
     subdomainPolicy: {{ $lws.subdomainPolicy }}
   {{- with $lws.rolloutStrategy }}
-  # See lws.rolloutStrategy in values.yaml for why maxSurge defaults to 0 here
-  # and not to the Deployment's 1.
   rolloutStrategy:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   leaderWorkerTemplate:
-    # Pods per group, INCLUDING the leader -- and what the engine gets as --nnodes.
     size: {{ $lws.size }}
-    # One member restarting has dropped out of the NCCL communicator and the
-    # others cannot re-form it around the newcomer; take the group down together.
     restartPolicy: {{ $lws.restartPolicy }}
     leaderTemplate:
       metadata:
         labels:
           app: {{ .Release.Name }}-sglang
-          # What the chart's Service selects on: the leader is the only pod
-          # running an HTTP server, so it is the only endpoint. Workers carry
-          # role: worker and are deliberately not selectable as backends.
+          # what the Service selects on -- workers run no HTTP server
           role: leader
           {{- with .Values.podLabels }}
           {{- toYaml . | nindent 10 }}

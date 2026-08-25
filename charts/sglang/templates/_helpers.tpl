@@ -30,20 +30,12 @@
 {{- .Values.fullnameOverride | default .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{/*
-  The LeaderWorkerSet's name, when lws.enabled.
-
-  It cannot simply be sglang.fullname: the LWS controller creates a headless
-  Service named after the LWS object (that is what gives the pods their DNS
-  subdomain and what LWS_LEADER_ADDRESS resolves through), and this chart already
-  owns a Service under that exact name. Two controllers writing one Service is
-  not a name clash Helm can warn about -- the LWS one would either fail to be
-  created or fight the chart's over the selector. The suffix keeps them apart, so
-  the stable ClusterIP that ModelRoute, the ServiceMonitor and openresty all
-  point at stays the chart's own.
-*/}}
-{{- define "sglang.lwsName" -}}
-{{- printf "%s-lws" (include "sglang.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- define "sglang.serviceName" -}}
+{{- $name := include "sglang.fullname" . -}}
+{{- if .Values.lws.enabled -}}
+{{- $name = printf "%s-leader" $name -}}
+{{- end -}}
+{{- $name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{/*

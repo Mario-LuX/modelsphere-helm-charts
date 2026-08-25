@@ -83,11 +83,20 @@
 {{- range $root.Values.extraArgs }}
 {{- $flags = append $flags (toString .) }}
 {{- end -}}
-# Total time allowed to shut down. The preStop hook AND SGLang draining after SIGTERM both come out of this, or the pod gets killed.
-# Checked at render time by sglang.shutdownBudget.
-terminationGracePeriodSeconds: {{ $root.Values.terminationGracePeriodSeconds }}
-{{- if $root.Values.modelCheck.enabled }}
+{{- /* Shutdown budget: preStop + SGLang's post-SIGTERM drain, checked by
+       sglang.shutdownBudget. Workers get their own, because they drain nothing
+       and their leader is already gone by then (LWS deletes them as GC after
+       it) -- a long grace only holds GPUs until the kubelet's SIGKILL. */}}
+{{- $grace := $root.Values.terminationGracePeriodSeconds }}
+{{- if and $worker $lws.workerTerminationGracePeriodSeconds }}
+{{- $grace = $lws.workerTerminationGracePeriodSeconds }}
+{{- end }}
+terminationGracePeriodSeconds: {{ $grace }}
+{{- /* Workers wait for the leader's rendezvous port; leaders wait for nothing. */}}
+{{- $waitLeader := and $worker $lws.waitForLeader }}
+{{- if or $root.Values.modelCheck.enabled $waitLeader }}
 initContainers:
+{{- if $root.Values.modelCheck.enabled }}
 # Refuse to start the engine unless the mounted model directory actually
 # holds a model. hostPathType above already rejects a missing path; this
 # covers an empty or half-copied one. Reuses the engine image so no extra
@@ -118,6 +127,41 @@ initContainers:
   - name: model-storage
     mountPath: {{ $root.Values.model.mountPath }}
     readOnly: true
+{{- end }}
+{{- if $waitLeader }}
+{{- /* The leader's dist port opens an image pull and a startup after the leader
+       POD exists, which is all startupPolicy: LeaderCreated promises. A worker
+       that races it and gives up first EXITS, which under
+       RecreateGroupOnPodRestart restarts the whole group into the same cold
+       start. Unbounded: a waiting worker is a late group, an exiting one is a
+       loop -- at the cost of holding the pod's GPUs meanwhile. Reuses the engine
+       image; bash's /dev/tcp does the probing. */}}
+- name: wait-leader
+  image: "{{ $root.Values.image.repository }}:{{ $root.Values.image.tag }}"
+  env:
+  {{- /* Fallback if LWS does not inject its env into init containers: this pod
+         is <leader-pod>-<workerIndex>, on the LWS's headless Service (or, under
+         UniquePerReplica, the per-group one, which carries the leader's name). */}}
+  - name: POD_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.name
+  command: ["bash", "-lc"]
+  args:
+    - |
+      set -u
+      leader="${LWS_LEADER_ADDRESS:-${POD_NAME%-*}.{{ ternary "${POD_NAME%-*}" (include "sglang.fullname" $root) (eq $lws.subdomainPolicy "UniquePerReplica") }}}"
+      port={{ $lws.distPort }}
+      echo "wait-leader: waiting for the group leader at ${leader}:${port}"
+      i=0
+      until timeout 5 bash -c "exec 3<>/dev/tcp/${leader}/${port}" 2>/dev/null; do
+        i=$((i + 1))
+        # ~1 line a minute, so a 20-minute cold start does not bury the log
+        [ $((i % 12)) -eq 1 ] && echo "wait-leader: ${leader}:${port} not accepting yet (${i} tries)"
+        sleep 5
+      done
+      echo "wait-leader: ${leader}:${port} is up after ${i} tries -- starting the engine"
+{{- end }}
 {{- end }}
 containers:
 - name: sglang

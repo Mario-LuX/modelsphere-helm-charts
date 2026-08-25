@@ -22,94 +22,77 @@ fullnameOverride: ""
 replicaCount: 1
 
 # Multi-node: one model instance spread across several nodes, as a
-# LeaderWorkerSet (leaderworkerset.x-k8s.io/v1) instead of a Deployment. For a
-# model whose weights do not fit in one node's GPUs -- the group is the unit
-# that loads the model, scales and restarts, because half a model serves
-# nothing.
+# LeaderWorkerSet (leaderworkerset.x-k8s.io/v1) instead of a Deployment -- for a
+# model whose weights do not fit in one node's GPUs. The GROUP (lws.size pods:
+# one leader + workers) is the unit that loads the model, scales and restarts,
+# because half a model serves nothing. Requires the LWS controller.
 #
-# Requires the LWS controller in the cluster (`kubectl get crd
-# leaderworkersets.leaderworkerset.x-k8s.io`); without it the install fails with
-# "no matches for kind LeaderWorkerSet".
+# The rest of the chart carries over: Service, ServiceMonitor, ModelRoute, CART
+# and the LLMScaler all keep working. The Service just narrows to role: leader
+# (SGLang serves HTTP on rank 0 only) and scaler.targetRef follows to the LWS,
+# where one replica is a whole group. --nnodes / --node-rank / --dist-init-addr
+# are derived from the group; the parallelism layout (--tp, --pp-size) goes in
+# extraArgs.
 #
-# Turning this on swaps out the workload, not the rest of the chart. The Service,
-# ServiceMonitor, ModelRoute, hang-watcher ConfigMap and CART are all rendered
-# exactly as before, and the Service simply narrows its selector to the leader
-# pods (role: leader), which are the only ones that serve: SGLang starts its HTTP
-# server on rank 0 only. So a ModelRoute, a CART and Prometheus scraping keep
-# working with no extra configuration.
+# STARTUP of one group
+#   1. LWS creates the leader pod                       [startupPolicy]
+#      LeaderCreated promises only that the POD exists -- nothing is listening.
+#      (LeaderReady would deadlock: see step 6.)
+#   2. worker pods are created, alongside the leader's own startup
+#   3. every pod runs the model-check init container    [modelCheck]
+#   4. workers then block until the leader's rendezvous
+#      port accepts a connection                        [waitForLeader, distPort]
+#      Without this they race the leader's image pull + startup, and a worker
+#      that gives up EXITS -- which recreates the whole group, into the same
+#      race. The wait is unbounded and holds the pod's GPUs.
+#   5. all ranks meet at ${LWS_LEADER_ADDRESS}:distPort, load weights, form the
+#      NCCL communicator
+#   6. the leader binds service.port, which happens only once the group is
+#      complete -- so the leader's startupProbe covers the whole group, and
+#      readiness on it means the instance is serving
 #
-# The LLMScaler works here too: scaler.targetRef follows the workload to the
-# LeaderWorkerSet, which has its own /scale subresource. What changes is the unit
-# it counts -- one replica is a whole GROUP (lws.size pods, one model instance),
-# so scaler.minReplicas/maxReplicas are group counts and a scale step costs
-# lws.size nodes' worth of GPUs.
+# SHUTDOWN of one group (scale-down, rolling update, or any member restarting
+# under restartPolicy: RecreateGroupOnPodRestart)
+#   1. LWS deletes the LEADER pod first  [terminationGracePeriodSeconds, ~3600]
+#      a. its endpoint is removed from the Service, in parallel with:
+#      b. preStop: wait lifecycle.preStop.endpointSyncSeconds, then poll until
+#         inflight requests reach 0, capped at drainSeconds
+#      c. preStop ends by SIGKILLing PID 1                [leaderPreStopKill]
+#         Currently a no-op: a process inside the container's own PID namespace
+#         cannot kill that namespace's init.
+#      d. SIGTERM -> SGLang's own drain -> schedulers exit; if it is wedged in a
+#         cross-node collective, the kubelet's SIGKILL at the end of the grace
+#         period is what ends it
+#   2. the worker StatefulSet is garbage collected -- LWS makes the leader POD
+#      its owner, so workers only begin terminating once the leader is gone
+#   3. worker pods                    [workerTerminationGracePeriodSeconds, 60]
+#      No traffic, nothing to drain, and their leader has already exited, so
+#      SIGTERM finds them blocked in a collective with no other end. The
+#      kubelet's SIGKILL is what ends them and releases the GPUs.
+#   4. only then can the replacement group start: same pod names, same GPUs --
+#      so (3) is what gates how quickly a group comes back
 #
-# The parallelism itself is NOT configured here. --nnodes, --node-rank and
-# --dist-init-addr are derived from the group (see _pod.tpl); how the resulting
-# GPUs are carved up -- --tp, --pp-size, --ep-size -- goes in extraArgs, and
-# restating the derived three there is refused rather than silently ignored.
-#
-# A worked example, mirroring a live 2-node H100 deployment (RDMA, hang-watcher,
-# NCCL env, shm), is in examples/sglang-values-lws-multinode.yaml.
+# Neither flow has an answer for a process wedged in the driver (D state): the
+# kubelet's SIGKILL stays pending, the pod sits in Terminating holding its GPUs,
+# and only node-level remediation clears it.
 lws:
   enabled: false
-  # Pods per group -- i.e. nodes per model instance, and what the chart passes as
-  # --nnodes. The leader is one of them, so 2 means one leader + one worker.
-  # model.gpus is still PER POD, so a --tp of 16 over 2 nodes means gpus: "8"
-  # here and --tp=16 in extraArgs.
-  size: 2
-  # Number of GROUPS, each a complete model instance of `size` pods. This is the
-  # knob that replicaCount is for a Deployment; total pods = replicas x size.
-  #
-  # Only used when scaler.enabled is false. With the scaler on, the chart omits
-  # spec.replicas entirely so the operator can own it (see lws.yaml), and the
-  # starting count comes from scaler.minReplicas instead.
-  replicas: 1
-  # The port workers reach the leader on for the initial NCCL/torch.distributed
-  # rendezvous (--dist-init-addr). Pod-to-pod inside the group, never served --
-  # it only has to be free in the container and differ from service.port.
-  distPort: 29500
-  # LeaderCreated starts the workers only once the leader pod exists, so the
-  # rendezvous address is resolvable before anything dials it. LeaderReady waits
-  # further, for the leader to pass its probes -- which here means waiting for a
-  # port that only binds AFTER the workers have joined, i.e. a deadlock. Leave
-  # this alone unless the probes above change shape.
+  size: 2                                   # pods per group, leader included = --nnodes
+  replicas: 1                               # GROUPS, not pods; omitted when the scaler owns it
+  distPort: 29500                           # rendezvous port, pod-to-pod inside the group
   startupPolicy: LeaderCreated
-  # A group is one model instance: a member that restarts has dropped out of the
-  # NCCL communicator, and the rest cannot re-form it on their own. Recreate the
-  # whole group instead of leaving it half-alive.
   restartPolicy: RecreateGroupOnPodRestart
-  # DNS for the group. Shared puts every group under one headless Service, which
-  # is all the intra-group rendezvous needs. UniquePerReplica gives each group its
-  # own -- only useful if something outside has to address one group by name.
-  subdomainPolicy: Shared
-  # Rendered verbatim as spec.rolloutStrategy.
-  #
-  # maxSurge: 0 is the honest default for GPUs: a surge needs a whole spare
-  # GROUP's worth of idle GPUs (size x model.gpus) to exist, and on a full
-  # cluster the new group would sit Pending forever while the old one keeps its
-  # GPUs. 0 retires a group first and rebuilds in place -- a real gap in service
-  # per group, but a bounded one. Raise it to 1 only where the spare capacity
-  # actually exists.
+  subdomainPolicy: Shared                   # Shared | UniquePerReplica
+  waitForLeader: true
+  workerTerminationGracePeriodSeconds: 60   # empty = same as the leader's
+  leaderPreStopKill: true
+  # maxSurge 0 because a surge needs a whole spare GROUP of GPUs (size x model.gpus);
+  # on a full cluster the new group would sit Pending while the old one holds them.
   rolloutStrategy:
     type: RollingUpdate
     rollingUpdateConfiguration:
       maxSurge: 0
       maxUnavailable: 1
-  # Have the leader's preStop hook SIGKILL PID 1 once it has drained.
-  #
-  # LWS deletes the leader FIRST when it tears a group down, so SGLang's own
-  # post-SIGTERM drain blocks inside a cross-node collective its still-running
-  # workers will never join: PID 1 wedges, and the pod burns the entire
-  # terminationGracePeriodSeconds holding its GPUs before the kubelet SIGKILLs
-  # it -- which on a full cluster is exactly what the replacement group is
-  # waiting on. Killing PID 1 after the drain moves that SIGKILL from "grace
-  # period expired" to "drain finished".
-  #
-  # Turn it off only if you have removed the reason for it (a single-node group,
-  # or an SGLang that no longer blocks there); the cost of it being on is a 137
-  # exit code on a pod that is being deleted anyway.
-  leaderPreStopKill: true
 
 image:
   repository: "lmsysorg/sglang"
