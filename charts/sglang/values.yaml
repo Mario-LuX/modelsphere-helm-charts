@@ -96,13 +96,11 @@ lws:
   waitForLeader: true
   workerTerminationGracePeriodSeconds: 60   # empty = same as the leader's
   leaderPreStopKill: true
-  # maxSurge 0 because a surge needs a whole spare GROUP of GPUs (size x model.gpus);
-  # on a full cluster the new group would sit Pending while the old one holds them.
   rolloutStrategy:
     type: RollingUpdate
     rollingUpdateConfiguration:
-      maxSurge: 0
-      maxUnavailable: 1
+      maxSurge: 1
+      maxUnavailable: 0
 
 image:
   repository: "lmsysorg/sglang"

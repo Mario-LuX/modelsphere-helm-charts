@@ -232,8 +232,8 @@ lifecycle:
 # script did.
 scaler:
   enabled: true
-  minReplicas: 5
-  maxReplicas: 40
+  minReplicas: 10
+  maxReplicas: 50
   syncPeriodSeconds: 10
   metricProvider: Custom
   serverAddress: "http://decision-gen.llm-scaler.svc:80"
