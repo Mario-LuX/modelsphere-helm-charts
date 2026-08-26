@@ -188,6 +188,8 @@ progressDeadlineSeconds: 2400
 # the deadline above is what eventually reports it. Set maxSurge: 0 /
 # maxUnavailable: 1 instead if these H100s are always fully allocated.
 
+priorityClassName: "inference-prod"
+
 # The script ran on one fixed host. On a cluster, steer the pod to nodes that
 # actually have two matching GPUs.
 nodeSelector: {}

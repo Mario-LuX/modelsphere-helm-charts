@@ -248,6 +248,8 @@ lifecycle:
   # no preStop and no escalation of their own -- benefit too.
   forceShutdown: true
 
+priorityClassName: "inference-prod"
+
 tolerations:
   - key: nvidia.com/gpu
     operator: Exists
