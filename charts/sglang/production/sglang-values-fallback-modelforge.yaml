@@ -6,6 +6,8 @@ image:
   repository: "harbor.4pd.io/hardcore-tech/sglang"
   tag: "v0.5.15-cu129"
 
+schedulerName: "binpack-scheduler"
+
 model:
   name: "kimi"
   # -v /mnt/disk0/models/modelforge/Qwen3.6-35B-A3B-793303:/model

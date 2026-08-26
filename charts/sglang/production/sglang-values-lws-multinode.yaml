@@ -19,6 +19,11 @@ lws:
   enabled: true
   # 2 nodes per instance. One leader (rank 0, serves the API) + one worker.
   size: 2
+  rolloutStrategy:
+    type: RollingUpdate
+    rollingUpdateConfiguration:
+      maxSurge: 0
+      maxUnavailable: 1
 
 # The LLMScaler targets the LeaderWorkerSet (its /scale subresource), so a
 # replica below is a whole 2-pod GROUP: max 2 means at most 4 pods / 32 GPUs.
