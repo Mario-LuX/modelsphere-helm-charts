@@ -242,6 +242,11 @@ lifecycle:
     # SGLang blocked in a collective its workers will never join.
     drainSeconds: 600
 
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoExecute
+
 # Both nodes of a group must be the same H100 SKU on the same driver: a
 # mismatched driver across a NCCL group fails at rendezvous, minutes in.
 affinity:
@@ -261,13 +266,20 @@ affinity:
 # there is a group behind it.
 cart:
   enabled: true
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: nvidia.com/gpu.product
+            operator: DoesNotExist
 modelRoute:
   enabled: true
-  name: "kimi-k2.5-green"
-  route: "kimi-k2.5-green"
+  name: "kimi-k2.5"
   nginx:
     outputConfigMap: "llm-route/openresty-conf"
     service: "llm-route/openresty"
+    route: "kimi-k2.5"
     values:
       default_max: "50"
       kimi_normalize_default_enabled: "false"
@@ -277,5 +289,6 @@ modelRoute:
     maxLoad: 50
   monitor:
     enabled: true
-    outputConfigMap: "monitoring/monitor-conf"
     gpuType: H100
+    model: kimi-k2.5
+    outputConfigMap: monitoring/monitor-conf

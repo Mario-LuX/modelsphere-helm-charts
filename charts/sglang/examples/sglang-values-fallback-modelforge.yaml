@@ -21,6 +21,13 @@ model:
 
 cart:
   enabled: true
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: nvidia.com/gpu.product
+            operator: DoesNotExist
 
 modelRoute:
   enabled: true
@@ -184,7 +191,10 @@ progressDeadlineSeconds: 2400
 # The script ran on one fixed host. On a cluster, steer the pod to nodes that
 # actually have two matching GPUs.
 nodeSelector: {}
-tolerations: []
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoExecute
 affinity:
   nodeAffinity:
     requiredDuringSchedulingIgnoredDuringExecution:
@@ -194,6 +204,7 @@ affinity:
           operator: In
           values:
           - "NVIDIA-H100-80GB-HBM3"
+          - "NVIDIA-H800"
         - key: nvidia.com/cuda.driver-version.full
           operator: In
           values:
@@ -213,7 +224,7 @@ lifecycle:
     drainSeconds: 600
     pollIntervalSeconds: 5
   shutdownReserveSeconds: 20
-  forceShutdown: false
+  forceShutdown: true
 
 # The chart always ships an LLMScaler. Bounds are conservative on purpose: each
 # replica claims 2 GPUs, so maxReplicas: 2 is already 4 GPUs. Set
@@ -221,21 +232,22 @@ lifecycle:
 # script did.
 scaler:
   enabled: true
-  minReplicas: 24
-  maxReplicas: 28
+  minReplicas: 5
+  maxReplicas: 40
   syncPeriodSeconds: 10
-  serverAddress: "http://prometheus-operated.monitoring.svc:9090"
-  metrics:
-    - name: queue-depth
-      query: 'avg(avg_over_time(sglang:num_queue_reqs{__SCOPE__}[1m]))'
-      target: "5"
+  metricProvider: Custom
+  serverAddress: "http://decision-gen.llm-scaler.svc:80"
+  customProvider:
+    serviceId: "fallback-modelforge-01"
+    path: "/decisions"
+    namespace: "modelforge"
   scaleDown:
     behavior: CacheAware
     # A cold start on a 35B model is expensive, so do not shrink on a brief dip.
     stabilizationWindowSeconds: 300
     # ...and give up at most one warm replica per sync period once we do shrink.
     maxStepReplicas: 2
-    deletionCostQuery: 'sglang:token_usage{__SCOPE__} * 100'
+    deletionCostQuery: ''
 
 serviceMonitor:
   enabled: true
