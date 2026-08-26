@@ -329,6 +329,9 @@ volumes:
 {{- with $root.Values.volumes }}
 {{- toYaml . | nindent 0 }}
 {{- end }}
+{{- with $root.Values.priorityClassName }}
+priorityClassName: {{ . }}
+{{- end }}
 {{- with $root.Values.nodeSelector }}
 nodeSelector:
   {{- toYaml . | nindent 2 }}

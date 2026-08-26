@@ -83,19 +83,22 @@ spec:
         - name: cfg
           configMap:
             name: {{ include "cart.configMapName" . }}   # chart 建初值,autoconfig 更新
-      {{- if or .Values.affinity .Values.ha.enabled }}
+      {{- /* 自定义 affinity 与「主备分散」是叠加关系,不是二选一:只写 nodeAffinity
+             (把 CART 钉到某类节点)时,下面的 podAntiAffinity 仍然保留 —— 否则 2 个
+             副本可能落到同一台,主备 HA 就白做了。要改/关掉分散,自己写一份
+             podAntiAffinity 覆盖即可。 */}}
+      {{- $aff := deepCopy (.Values.affinity | default dict) }}
+      {{- if and .Values.ha.enabled (not (hasKey $aff "podAntiAffinity")) }}
+      {{- $spread := dict "preferredDuringSchedulingIgnoredDuringExecution" (list (dict
+            "weight" 100
+            "podAffinityTerm" (dict
+              "topologyKey" "kubernetes.io/hostname"
+              "labelSelector" (dict "matchLabels" (include "cart.selectorLabels" . | fromYaml))))) }}
+      {{- $aff = set $aff "podAntiAffinity" $spread }}
+      {{- end }}
+      {{- with $aff }}
       affinity:
-        {{- if .Values.affinity }}
-        {{- toYaml .Values.affinity | nindent 8 }}
-        {{- else }}
-        podAntiAffinity:                # 主备尽量分散到不同节点(软约束)
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              podAffinityTerm:
-                topologyKey: kubernetes.io/hostname
-                labelSelector:
-                  matchLabels: {{- include "cart.selectorLabels" . | nindent 20 }}
-        {{- end }}
+        {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}

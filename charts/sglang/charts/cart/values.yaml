@@ -65,6 +65,8 @@ resources:
 podAnnotations: {}
 nodeSelector: {}
 tolerations: []
+# 与 ha.enabled 的「主备分散到不同节点」叠加,不是替换:这里只写 nodeAffinity 时,
+# 那条 podAntiAffinity 仍在。自己写 podAntiAffinity 才会覆盖它。
 affinity: {}
 nameOverride: ""
 fullnameOverride: ""

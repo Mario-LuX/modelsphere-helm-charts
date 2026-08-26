@@ -444,6 +444,13 @@ cart:
   #   ...
   # resources:
   #   limits: { cpu: "4", memory: 4Gi }
+  # Scheduling. CART is CPU-only, so it has no business occupying a GPU node --
+  # pin it away if yours are tainted or scarce. affinity ADDS to the subchart's
+  # HA anti-affinity (which keeps the two replicas off one node) instead of
+  # replacing it; write your own podAntiAffinity to override that.
+  # nodeSelector: {}
+  # tolerations: []
+  # affinity: {}
 
 # Publish this deployment to autoconfig as a ModelRoute
 # (routing.gpucluster.io/v1alpha1), so openresty's peers and the CART workers
@@ -664,6 +671,22 @@ progressDeadlineSeconds: 1800
 # How many old ReplicaSets to keep for rollback. They hold no pods, so this is
 # about rollback depth, not resources.
 revisionHistoryLimit: 10
+
+# PriorityClass for every pod this chart makes -- Deployment pod, LWS leader and
+# LWS worker alike. One value on purpose: preempting either member of a group
+# costs the whole group, so ranking them differently buys nothing.
+#
+# It does not defragment anything. Preemption frees space on ONE node by killing
+# lower-priority pods there; it never repacks existing pods, and does nothing at
+# all if there is no lower-priority work to evict. What it does buy is queue
+# order (a group is considered before smaller pods for freed capacity) and a say
+# in who loses when capacity is short.
+#
+# Under lws.enabled, note preemption is per-pod and blind to the group: a
+# preemptor can win the leader's node and lose the worker's, leaving GPUs held by
+# a group that cannot run. Pair a high priority with `preemptionPolicy: Never` on
+# the class for ordering without that risk, or use a gang scheduler.
+priorityClassName: ""
 
 # Pin the GPU pods to particular nodes. `affinity` is the place for node
 # affinity / anti-affinity rules; nodeSelector and tolerations are the simpler
