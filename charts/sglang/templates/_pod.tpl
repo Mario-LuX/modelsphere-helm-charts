@@ -329,6 +329,9 @@ volumes:
 {{- with $root.Values.volumes }}
 {{- toYaml . | nindent 0 }}
 {{- end }}
+{{- with $root.Values.schedulerName }}
+schedulerName: {{ . }}
+{{- end }}
 {{- with $root.Values.priorityClassName }}
 priorityClassName: {{ . }}
 {{- end }}
@@ -362,10 +365,20 @@ tolerations:
   blocks inside cross-node NCCL, PID 1 sits in do_wait, and the pod burns the
   entire terminationGracePeriodSeconds before the kubelet SIGKILLs it -- holding
   its GPUs the whole time, which on a full cluster is exactly what the
-  replacement group is waiting for. Killing PID 1 ourselves moves that SIGKILL
-  from "grace period expired" to "drain finished", and it happens whether the
-  drain completed or ran out of time, because either way waiting longer only
-  extends the deadlock.
+  replacement group is waiting for.
+
+  What the tail may NOT do is SIGKILL PID 1. A process inside a PID namespace
+  cannot kill that namespace's init: the kernel drops signals the init has no
+  handler for, and SIGKILL can never have one (man 7 pid_namespaces). kill(2)
+  still returns 0, so it reads as success while doing nothing.
+
+  What works is the pair below. SIGTERM to PID 1 IS delivered, because SGLang
+  installs a handler for it -- so the hook starts the real shutdown itself,
+  inside the grace period. Then it waits shutdownReserveSeconds: if PID 1 exits,
+  the kernel tears the PID namespace down and takes this hook with it, so simply
+  surviving that sleep means SGLang is wedged. At that point its CHILDREN get
+  SIGKILLed -- they carry no such protection -- and their death releases the
+  do_wait PID 1 is parked in, so it exits on its own.
 
   Call it as: include "sglang.preStopScript" (dict "root" $ "kill" true)
 */}}
@@ -447,10 +460,25 @@ else:
     log("drain deadline reached after {{ $preStop.drainSeconds }}s, requests may still be in flight")
 {{- if .kill }}
 
-# Drained (or out of time). Kill PID 1 rather than let SIGTERM find SGLang
-# blocked in a cross-node collective its workers will never join -- see the
-# comment above this script.
-log("killing PID 1 to release the NCCL group")
-os.kill(1, signal.SIGKILL)
+# Drained (or out of time). Drive the shutdown from here rather than let the
+# kubelet's SIGTERM find SGLang blocked in a collective its workers will never
+# join. SIGTERM reaches PID 1 because SGLang installs a handler for it; SIGKILL
+# never would. See the comment above this script.
+log("SIGTERM -> PID 1")
+os.kill(1, signal.SIGTERM)
+
+# If PID 1 exits, the kernel tears down the PID namespace and this hook dies with
+# it -- so getting past this sleep means SGLang is stuck in its own drain.
+time.sleep({{ $root.Values.lifecycle.shutdownReserveSeconds }})
+
+log("still up after {{ $root.Values.lifecycle.shutdownReserveSeconds }}s -- killing PID 1's children to release its do_wait")
+keep = (1, os.getpid(), os.getppid())
+for entry in os.listdir("/proc"):
+    if not entry.isdigit() or int(entry) in keep:
+        continue
+    try:
+        os.kill(int(entry), signal.SIGKILL)
+    except OSError:
+        pass
 {{- end }}
 {{- end -}}

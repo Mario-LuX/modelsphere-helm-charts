@@ -237,10 +237,16 @@ lifecycle:
   preStop:
     enabled: true
     endpointSyncSeconds: 5
-    # The bounded drain -- the pod leaves as soon as it goes idle, and after this
-    # the leader kills PID 1 (lws.leaderPreStopKill) rather than let SIGTERM find
-    # SGLang blocked in a collective its workers will never join.
+    # The bounded drain: the pod leaves as soon as it goes idle. What happens
+    # after it -- SIGTERM to PID 1, then killing its children if it does not go
+    # -- is lws.leaderPreStopKill.
     drainSeconds: 600
+  # The draining already happened above, bounded and observable. SGLang's own
+  # post-SIGTERM drain only repeats it with no timeout, and that is the loop a
+  # terminating leader gets stuck in ("Waiting for child process") once its
+  # workers are gone. Skip it. Both roles get the env, so workers -- which have
+  # no preStop and no escalation of their own -- benefit too.
+  forceShutdown: true
 
 tolerations:
   - key: nvidia.com/gpu
