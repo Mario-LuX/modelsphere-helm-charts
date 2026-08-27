@@ -210,9 +210,12 @@ startupProbe:
     port: http
   periodSeconds: 15
   timeoutSeconds: 10
-  # 80 x 15s = 20 minutes for a cold load of a model this size across two nodes.
-  # Liveness and readiness stay suppressed for all of it.
-  failureThreshold: 80
+  # 160 x 15s = 40 minutes for a cold load of a model this size across two nodes.
+  # Liveness and readiness stay suppressed for all of it. 20 minutes was too
+  # tight -- a warm-cache start already takes ~10 min -- and killing a leader
+  # mid-load restarts the weight read, so the group never converges.
+  # No progress deadline applies: that guard is Deployment-only.
+  failureThreshold: 160
 readinessProbe:
   httpGet:
     path: /v1/models
@@ -295,6 +298,11 @@ modelRoute:
     route: "kimi-k2.5"
     values:
       default_max: "50"
+      # 回显 X-Routed-Peer: <后端ip:port>|<GPU型号>|<节点名>,便于从响应直接定位到落在哪台机器。
+      # openresty 侧默认关(2026-07"不外泄内部 peer"的安全取向),按路由显式开;这里是集群内
+      # 服务,拓扑对调用方可见可接受。CART 侧已配 proxy.add_routed_peer_header=true,回的是
+      # 真实后端而非 CART 自己。
+      expose_routed_peer: "true"
       kimi_normalize_default_enabled: "false"
       tps_limit_tps: "30"
       ttft_limit_ms: "20000"
