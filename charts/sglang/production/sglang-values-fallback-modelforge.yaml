@@ -198,7 +198,7 @@ nodeSelector: {}
 tolerations:
   - key: nvidia.com/gpu
     operator: Exists
-    effect: NoExecute
+    effect: NoSchedule
 affinity:
   nodeAffinity:
     requiredDuringSchedulingIgnoredDuringExecution:

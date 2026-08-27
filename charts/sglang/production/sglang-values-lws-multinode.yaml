@@ -258,7 +258,7 @@ priorityClassName: "inference-prod"
 tolerations:
   - key: nvidia.com/gpu
     operator: Exists
-    effect: NoExecute
+    effect: NoSchedule
 
 # Both nodes of a group must be the same H100 SKU on the same driver: a
 # mismatched driver across a NCCL group fails at rendezvous, minutes in.
