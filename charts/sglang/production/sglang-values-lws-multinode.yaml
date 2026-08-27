@@ -22,7 +22,7 @@ lws:
   rolloutStrategy:
     type: RollingUpdate
     rollingUpdateConfiguration:
-      maxSurge: 0
+      maxSurge: 1
       maxUnavailable: 1
 
 # The LLMScaler targets the LeaderWorkerSet (its /scale subresource), so a
