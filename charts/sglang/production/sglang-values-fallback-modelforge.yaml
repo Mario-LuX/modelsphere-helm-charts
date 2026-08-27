@@ -39,6 +39,11 @@ modelRoute:
     route: "fallback-modelforge-0.1"
     values:
       default_max: "50"
+      # 回显 X-Routed-Peer: <后端ip:port>|<GPU型号>|<节点名>,便于从响应直接定位到落在哪台机器。
+      # openresty 侧默认关(2026-07"不外泄内部 peer"的安全取向),按路由显式开;这里是集群内
+      # 服务,拓扑对调用方可见可接受。CART 侧已配 proxy.add_routed_peer_header=true,回的是
+      # 真实后端而非 CART 自己。
+      expose_routed_peer: "true"
       kimi_normalize_default_enabled: "false"
       tps_limit_tps: "30"
       ttft_limit_ms: "20000"
