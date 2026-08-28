@@ -116,14 +116,34 @@ Run this in CI on every branch.
 makes adoption a provable no-op — helmfile renders exactly what
 `helm install ./charts/sglang` rendered. Once the chart is packaged and pushed:
 
-1. push `0.4.1` to harbor
-2. uncomment the `repositories:` block, set `$chart` to `hardcore/sglang` and
-   `$version` to `0.4.1`
-3. `make diff` — **it must still be empty**
+1. push `0.4.2` to harbor
+2. uncomment the `repositories:` block and change the `templates.sglang` anchor
+   to `chart: hardcore/sglang` plus `version: "0.4.2"` — all three releases
+   merge that anchor, so it is one edit
+3. drop `--skip-deps` from `HELMFILE_FLAGS` in the `Makefile`; helmfile needs a
+   repo refresh to see a newly pushed version, which it does not need while the
+   chart is a local path
+4. `make diff` — **it must still be empty**
 
-Step 3 is the whole point: an empty diff proves the artifact in harbor is the
+Step 4 is the whole point: an empty diff proves the artifact in harbor is the
 same tree these values were tested against. A non-empty one means the push was
 stale, and you found out before deploying rather than after.
+
+### Why the anchor, and not a template variable
+
+Helmfile v1 no longer renders `helmfile.yaml` as a Go template — only
+`helmfile.yaml.gotmpl` is templated. A `{{ $chart }}` variable in this file is
+therefore left as literal text and the YAML fails to parse:
+
+```
+failed to read helmfile.yaml: reading document at index 1.
+Started seeing this since Helmfile v1? Add the .gotmpl file extension:
+yaml: line 42: did not find expected node content
+```
+
+Renaming to `.gotmpl` is one fix. The anchor is the better one: it keeps the
+file ordinary YAML that any tool can read, and a merge key expresses "these
+three releases share one chart" more directly than a variable does.
 
 ## Values are schema-checked
 

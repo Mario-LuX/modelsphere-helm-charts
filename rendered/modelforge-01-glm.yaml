@@ -1,0 +1,731 @@
+---
+# Source: sglang/charts/cart/templates/pdb.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: modelforge-01-glm-cart
+  namespace: modelforge-01-glm
+  labels:
+    helm.sh/chart: cart-0.1.2
+    app.kubernetes.io/name: cart
+    app.kubernetes.io/instance: modelforge-01-glm
+    app.kubernetes.io/version: "v0.6.2-k8s"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cart
+      app.kubernetes.io/instance: modelforge-01-glm
+
+---
+# Source: sglang/templates/pdb.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: modelforge-01-glm
+  namespace: modelforge-01-glm
+  labels:
+    app: modelforge-01-glm-sglang
+spec:
+  maxUnavailable: 1
+  # AlwaysAllow lets a pod that has never been Ready be evicted even while the
+  # budget is unmet. Without it (the API default, IfHealthyBudget) a fleet that
+  # is already short one replica cannot be drained at all -- and on this chart
+  # "not Ready" is the normal state for the ~20 minutes a large model spends
+  # loading, so the window where that bites is not a corner case.
+  # Requires Kubernetes >= 1.27 (>= 1.26 behind a feature gate); an older API
+  # server drops the field rather than failing, leaving the default behaviour.
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      # Every engine pod of this release: the Deployment's, or -- under
+      # lws.enabled -- both roles of every group. See the note above on why
+      # workers are in here.
+      app: modelforge-01-glm-sglang
+---
+# Source: sglang/charts/cart/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: modelforge-01-glm-cart
+  namespace: modelforge-01-glm
+  labels:
+    helm.sh/chart: cart-0.1.2
+    app.kubernetes.io/name: cart
+    app.kubernetes.io/instance: modelforge-01-glm
+    app.kubernetes.io/version: "v0.6.2-k8s"
+    app.kubernetes.io/managed-by: Helm
+
+---
+# Source: sglang/charts/cart/templates/configmap.yaml
+# cart-config:chart 建初值(config.yaml,含 server 块 + 初始 workers),autoconfig 更新
+# (autoconfig 只重填 workers 段;Helm 3 三方合并:模板不变时 upgrade 不覆盖 autoconfig 写的 live 值)。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: modelforge-01-glm-cart-config
+  namespace: modelforge-01-glm
+  labels:
+    helm.sh/chart: cart-0.1.2
+    app.kubernetes.io/name: cart
+    app.kubernetes.io/instance: modelforge-01-glm
+    app.kubernetes.io/version: "v0.6.2-k8s"
+    app.kubernetes.io/managed-by: Helm
+data:
+  config.yaml: |
+    server:
+      host: "0.0.0.0"
+      port: 8071
+    cache:
+      threshold: 0.3
+    health:
+      endpoint: "/health"
+      interval_secs: 10
+    proxy:
+      add_routed_peer_header: true   # 回 x-routed-peer 头 → openresty forwarded_to 得真实后端 → bodylog 按后端聚合 → monitor per-model TPM 生效(其余 proxy 字段 serde 默认,含 connect_timeout_secs=2)
+    workers: []
+    
+
+---
+# Source: sglang/templates/hang-watcher-configmap.yaml
+# Thresholds for the hang-watcher sidecar, mounted at /etc/hang-watcher. The
+# sidecar hot-reloads this on mtime change, so `helm upgrade` retunes it in place
+# without a pod restart. Keys are the sidecar's own (snake_case); values come
+# from hangWatcher.config in values.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: modelforge-01-glm-hang-watcher
+  namespace: modelforge-01-glm
+  labels:
+    app: modelforge-01-glm-sglang
+data:
+  config.json: |
+    {
+      "poll_interval_sec": 15,
+      "stall_sec": 300,
+      "metrics_timeout_sec": 10,
+      "active_probe_enabled": true,
+      "active_probe_path": "/v1/completions",
+      "active_probe_method": "POST",
+      "active_probe_body": "{\"model\":\"glm-5\",\"prompt\":\"ping\",\"max_tokens\":1,\"stream\":false}",
+      "active_probe_timeout_sec": 60
+    }
+
+---
+# Source: sglang/charts/cart/templates/rbac.yaml
+# ha-gate 需要:管自己那把 Lease(选举)+ patch 自己 pod 的 active 标签(门控 Service)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: modelforge-01-glm-cart-ha
+  namespace: modelforge-01-glm
+  labels:
+    helm.sh/chart: cart-0.1.2
+    app.kubernetes.io/name: cart
+    app.kubernetes.io/instance: modelforge-01-glm
+    app.kubernetes.io/version: "v0.6.2-k8s"
+    app.kubernetes.io/managed-by: Helm
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "patch"]
+
+---
+# Source: sglang/charts/cart/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: modelforge-01-glm-cart-ha
+  namespace: modelforge-01-glm
+  labels:
+    helm.sh/chart: cart-0.1.2
+    app.kubernetes.io/name: cart
+    app.kubernetes.io/instance: modelforge-01-glm
+    app.kubernetes.io/version: "v0.6.2-k8s"
+    app.kubernetes.io/managed-by: Helm
+subjects:
+  - kind: ServiceAccount
+    name: modelforge-01-glm-cart
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: modelforge-01-glm-cart-ha
+
+---
+# Source: sglang/charts/cart/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: modelforge-01-glm-cart
+  namespace: modelforge-01-glm
+  labels:
+    helm.sh/chart: cart-0.1.2
+    app.kubernetes.io/name: cart
+    app.kubernetes.io/instance: modelforge-01-glm
+    app.kubernetes.io/version: "v0.6.2-k8s"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: cart
+    app.kubernetes.io/instance: modelforge-01-glm
+    cart-active: "true"   # 只选 leader pod(ha-gate 打的 active 标签)
+  ports:
+    - name: http
+      port: 8071
+      targetPort: 8071
+
+---
+# Source: sglang/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: modelforge-01-glm
+  namespace: modelforge-01-glm
+  labels:
+    app: modelforge-01-glm-sglang
+spec:
+  type: ClusterIP
+  selector:
+    app: modelforge-01-glm-sglang
+  ports:
+  - port: 8050
+    targetPort: 8050
+    name: http-inference
+
+---
+# Source: sglang/charts/cart/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: modelforge-01-glm-cart
+  namespace: modelforge-01-glm
+  labels:
+    helm.sh/chart: cart-0.1.2
+    app.kubernetes.io/name: cart
+    app.kubernetes.io/instance: modelforge-01-glm
+    app.kubernetes.io/version: "v0.6.2-k8s"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cart
+      app.kubernetes.io/instance: modelforge-01-glm
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cart
+        app.kubernetes.io/instance: modelforge-01-glm
+    spec:
+      terminationGracePeriodSeconds: 3600   # 硬切刀:到点 SIGKILL 强砍在途流。cart 也要排空长流(SSE 转发),须按最长流式响应设,别吃 k8s 默认 30s(见 openresty chart)
+      serviceAccountName: modelforge-01-glm-cart   # ha-gate 用它管 Lease
+      shareProcessNamespace: true
+      initContainers:
+        # 等 autoconfig 把真 workers(url: http://...)写进 config.yaml 再启 cart —— CART 拒绝空 workers 会崩溃循环。
+        # 停在 Init 而非 CrashLoop;workers 就绪(或 ~10min 超时兜底)后放行。用 cart 镜像自身(已在,免额外拉)。
+        - name: wait-workers
+          image: "harbor.4pd.io/hardcore-tech/cache_aware_router:v0.6.2-k8s"
+          command: ["sh", "-c", "for i in $(seq 1 300); do grep -qE 'url:[[:space:]]*http' /workspace/configs/config.yaml 2>/dev/null && { echo 'workers ready'; exit 0; }; echo \"[$i] 等 autoconfig 写 workers...\"; sleep 2; done; echo 'timeout, 仍放行'; exit 0"]
+          volumeMounts:
+            - name: cfg
+              mountPath: /workspace/configs
+      containers:
+        - name: cart
+          image: "harbor.4pd.io/hardcore-tech/cache_aware_router:v0.6.2-k8s"
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "ulimit -n 65535; exec ./launch_service"]
+          ports:
+            - containerPort: 8071
+          volumeMounts:
+            - name: cfg                 # autoconfig 写的 config.yaml(整卷挂到 /workspace/configs)
+              mountPath: /workspace/configs
+          startupProbe:                 # 慢启动预算:端口起来前不判 live/ready(最多 ~60s)
+            tcpSocket: { port: 8071 }
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:                # startup 过后才生效 → snappy 快抓假死
+            tcpSocket: { port: 8071 }
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:               # startup 过后端口已在 → 秒 Ready;谁收流量由 ha-active 标签定
+            tcpSocket: { port: 8071 }
+            periodSeconds: 2
+            failureThreshold: 2
+          resources:
+            limits:
+              cpu: "4"
+              memory: 4Gi
+            requests:
+              cpu: 200m
+              memory: 256Mi
+        - name: reload
+          image: harbor.4pd.io/hardcore-tech/autoconfig-reload:0.3.31
+          args: ["--watch", "/workspace/configs", "--process", "cache-aware-router"]
+          volumeMounts:
+            - name: cfg
+              mountPath: /workspace/configs
+        - name: hagate                  # master-standby:只有 leader 给自己打 cart-active 标签 → 只有它进 Service
+          image: harbor.4pd.io/hardcore-tech/autoconfig-hagate:0.3.31
+          args: ["--lease", "modelforge-01-glm-cart-ha", "--http", ":8081", "--app-tcp", "127.0.0.1:8071", "--label-key", "cart-active"]
+          env:
+            - { name: POD_NAME,      valueFrom: { fieldRef: { fieldPath: metadata.name } } }
+            - { name: POD_NAMESPACE, valueFrom: { fieldRef: { fieldPath: metadata.namespace } } }
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 64Mi }
+      volumes:
+        - name: cfg
+          configMap:
+            name: modelforge-01-glm-cart-config   # chart 建初值,autoconfig 更新
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: nvidia.com/gpu.product
+                operator: DoesNotExist
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/instance: modelforge-01-glm
+                  app.kubernetes.io/name: cart
+              topologyKey: kubernetes.io/hostname
+            weight: 100
+
+---
+# Source: sglang/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: modelforge-01-glm
+  namespace: modelforge-01-glm
+  labels:
+    app: modelforge-01-glm-sglang
+spec:
+  # replicas is deliberately ABSENT while the LLMScaler is enabled.
+  #
+  # The controller writes spec.replicas on this Deployment, which makes it the
+  # server-side-apply owner of that field (field manager "manager"). If the chart
+  # also declared it, every `helm upgrade` would try to take ownership back and
+  # fail with:
+  #   conflict with "manager" using apps/v1: .spec.replicas
+  # Leaving it out lets the operator own the field outright. The initial replica
+  # count then comes from scaler.minReplicas on the first reconcile, not from
+  # replicaCount.
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  # Checked against the startupProbe budget by the block at the top of this file.
+  progressDeadlineSeconds: 2400
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: modelforge-01-glm-sglang
+  template:
+    metadata:
+      labels:
+        app: modelforge-01-glm-sglang
+    spec:
+      
+      terminationGracePeriodSeconds: 3600
+      initContainers:
+      # Refuse to start the engine unless the mounted model directory actually
+      # holds a model. hostPathType above already rejects a missing path; this
+      # covers an empty or half-copied one. Reuses the engine image so no extra
+      # image has to be pulled, and takes no GPU.
+      - name: model-check
+        image: "harbor-contest.4pd.io/lijiashu/sglang:v0.5.10.post1"
+        command:
+          - /bin/sh
+          - -c
+          - |
+            DIR="/model"
+            if [ ! -d "$DIR" ]; then
+              echo "model-check: $DIR is not a directory" >&2
+              exit 1
+            fi
+            if [ -z "$(ls -A "$DIR" 2>/dev/null)" ]; then
+              echo "model-check: $DIR is empty -- is /mnt/disk0/models/modelforge/Qwen3.6-35B-A3B-793303-glm-5 populated on this node?" >&2
+              exit 1
+            fi
+            if [ -z "$(find "$DIR" -maxdepth 1 -name "config.json" -print -quit)" ]; then
+              echo "model-check: no config.json directly under $DIR -- looks like an incomplete model" >&2
+              exit 1
+            fi
+            if [ -z "$(find "$DIR" -maxdepth 1 -name "*.safetensors" -print -quit)" ]; then
+              echo "model-check: no *.safetensors directly under $DIR -- looks like an incomplete model" >&2
+              exit 1
+            fi
+            echo "model-check: $DIR looks like a model directory"
+        volumeMounts:
+        - name: model-storage
+          mountPath: /model
+          readOnly: true
+      containers:
+      - name: sglang
+        image: "harbor-contest.4pd.io/lijiashu/sglang:v0.5.10.post1"
+        command: ["python3", "-m", "sglang.launch_server"]
+        args:
+          - "--model-path=/model"
+          - "--served-model-name=glm-5"
+          - "--host=0.0.0.0"
+          - "--port=8050"
+          - "--context-length=262144"
+          - "--enable-metrics"
+          - "--tp=2"
+          - "--mem-fraction-static=0.85"
+          - "--radix-eviction-policy=lru"
+          - "--mamba-scheduler-strategy=extra_buffer"
+          - "--page-size=64"
+          - "--chunked-prefill-size=16384"
+          - "--trust-remote-code"
+          - "--enable-cache-report"
+          - "--stream-response-default-include-usage"
+          - "--reasoning-parser=qwen3"
+          - "--tool-call-parser=qwen3_coder"
+        env:
+          # false makes /health a plain status check. Left at SGLang's own
+          # default (true) it runs a real 1-token generation, sleeps at least 1s
+          # and can take 20s, which no sane probe timeout survives.
+          - name: SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION
+            value: "false"
+          # Makes SGLang skip its drain and exit as soon as SIGTERM arrives.
+          - name: SGL_FORCE_SHUTDOWN
+            value: "1"
+          - name: PYTORCH_ALLOC_CONF
+            value: expandable_segments:True
+          - name: NCCL_DEBUG
+            value: WARN
+          - name: SGLANG_MOE_CONFIG_DIR
+            value: /moe-config
+        ports:
+        - containerPort: 8050
+          name: http
+        securityContext:
+          capabilities:
+            add:
+            - SYS_PTRACE
+            - SYS_NICE
+        volumeMounts:
+        - name: model-storage
+          mountPath: /model
+          readOnly: true
+        - mountPath: /moe-config
+          name: moe-config
+          readOnly: true
+        - mountPath: /root/.cache
+          name: dot-cache
+        - mountPath: /dev/shm
+          name: dshm
+        resources:
+          limits:
+            ephemeral-storage: 16Gi
+            nvidia.com/gpu: "2"
+          requests:
+            ephemeral-storage: 16Gi
+        lifecycle:
+          preStop:
+            # Runs before SIGTERM, and its time counts against terminationGracePeriodSeconds.
+            # Written in python3 because that is what the container already runs, so it is always there -- the SGLang image ships no curl or wget. Needs no external drain API.
+            exec:
+              command:
+                - python3
+                - -c
+                - |
+                    import time, urllib.request
+                    
+                    METRICS = "http://127.0.0.1:8050/metrics"
+                    # What SGLang is working on right now, plus what is queued up.
+                    # These names are SGLang's own -- vLLM calls them
+                    # vllm:num_requests_running / vllm:num_requests_waiting.
+                    BUSY = ("sglang:num_running_reqs", "sglang:num_queue_reqs")
+                    # Never send this at a proxy: a cluster that injects HTTP_PROXY into pods would
+                    # otherwise have us ask a proxy for the pod's OWN port, which it cannot reach --
+                    # and an unreadable /metrics reads as "no server to drain" below.
+                    OPEN = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
+                    
+                    
+                    def log(msg):
+                        # PID 1's stdout, so this lands in `kubectl logs` beside the engine's own.
+                        try:
+                            with open("/proc/1/fd/1", "a") as f:
+                                f.write("[preStop] %s\n" % msg)
+                        except Exception:
+                            pass
+                    
+                    
+                    def inflight():
+                        """Requests still on this pod, or None if we cannot tell."""
+                        try:
+                            body = OPEN(METRICS, timeout=2).read().decode()
+                        except Exception:
+                            return None
+                        total, found = 0.0, False
+                        for line in body.splitlines():
+                            if line.startswith(BUSY):
+                                try:
+                                    total += float(line.rsplit(" ", 1)[1])
+                                except (IndexError, ValueError):
+                                    return None
+                                found = True
+                        # No matching series at all means the metrics we rely on are
+                        # missing (--enable-metrics dropped, or renamed upstream). Report
+                        # "cannot tell" rather than "idle", so a broken assumption makes
+                        # the drain wait instead of silently skipping.
+                        return total if found else None
+                    
+                    
+                    # Keep serving while the cluster takes this pod out of rotation, so no new requests are sent here.
+                    time.sleep(5)
+                    
+                    # Then wait for the requests we already accepted, stopping as soon as SGLang says it is idle.
+                    # Unreadable metrics come back as None, which is never == 0, so a blip keeps us waiting rather
+                    # than cutting requests off early. Staying unreadable for ~30s is different: there is no
+                    # server to drain -- it never bound its port, or it has already died -- and sitting out the rest
+                    # of drainSeconds would only hold the GPUs while the replacement waits for them. A live server
+                    # is covered either way, because SIGTERM starts SGLang's own drain once this hook returns.
+                    deadline = time.monotonic() + 600
+                    unreadable = 0
+                    while time.monotonic() < deadline:
+                        n = inflight()
+                        if n == 0:
+                            log("drained: nothing in flight")
+                            break
+                        if n is None:
+                            unreadable += 1
+                            if unreadable >= 6:
+                                log("metrics unreadable for ~30s -- no server to drain")
+                                break
+                        else:
+                            unreadable = 0
+                        time.sleep(5)
+                    else:
+                        log("drain deadline reached after 600s, requests may still be in flight")
+        # While this is running the kubelet suppresses the other two probes, so a
+        # slow model load cannot trip a restart. Its
+        # failureThreshold x periodSeconds is the entire startup budget.
+        #
+        # Under LWS it covers more than a model load: the leader's port only binds
+        # once the whole group has finished the NCCL rendezvous, so this budget has
+        # to clear the slowest worker's start too.
+        startupProbe:
+          failureThreshold: 80
+          httpGet:
+            path: /v1/models
+            port: http
+          periodSeconds: 15
+          timeoutSeconds: 10
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /v1/models
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 5
+        # hang-watcher owns liveness: probe the sidecar's /healthz on the shared
+        # pod network; a 503 (hang) restarts THIS container. Replaces the
+        # /health_generate check -- see hangWatcher in values.yaml for why.
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 9090
+          failureThreshold: 3
+          periodSeconds: 15
+      # Hang-detection sidecar (see hangWatcher in values.yaml). Reads this pod's
+      # own SGLang /metrics over localhost and serves /healthz for the engine's
+      # livenessProbe above. Reports only; the kubelet does the restart. No RBAC.
+      #
+      # Worker pods do not get one: they run no HTTP server, so there are no metrics
+      # to read -- and under RecreateGroupOnPodRestart a hung group is dealt with by
+      # restarting the leader anyway, which takes the whole group with it.
+      - name: hang-watcher
+        image: "harbor.4pd.io/hardcore-tech/hang-watcher:0.1.10"
+        env:
+        - name: ENGINE_URL
+          value: "http://127.0.0.1:8050"
+        - name: LISTEN
+          value: ":9090"
+        - name: CONFIG_FILE
+          value: /etc/hang-watcher/config.json
+        ports:
+        - containerPort: 9090
+          name: hang-hz
+        volumeMounts:
+        - name: hang-watcher-config
+          mountPath: /etc/hang-watcher
+          readOnly: true
+        resources:
+          limits:
+            cpu: 100m
+            memory: 64Mi
+          requests:
+            cpu: 10m
+            memory: 16Mi
+      volumes:
+      - name: model-storage
+        hostPath:
+          path: /mnt/disk0/models/modelforge/Qwen3.6-35B-A3B-793303-glm-5
+          type: Directory
+      - name: hang-watcher-config
+        configMap:
+          name: modelforge-01-glm-hang-watcher
+      - hostPath:
+          path: /root/deploy/modelforge-moe-config-merged
+          type: Directory
+        name: moe-config
+      - emptyDir:
+          sizeLimit: 10Gi
+        name: dot-cache
+      - emptyDir:
+          medium: Memory
+          sizeLimit: 16Gi
+        name: dshm
+      schedulerName: binpack-scheduler
+      priorityClassName: inference-prod
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: nvidia.com/gpu.product
+                operator: In
+                values:
+                - NVIDIA-A100-SXM4-80GB
+              - key: nvidia.com/cuda.driver-version.full
+                operator: In
+                values:
+                - 575.57.08
+      tolerations:
+        - effect: NoSchedule
+          key: nvidia.com/gpu
+          operator: Exists
+---
+# Source: sglang/templates/llmscaler.yaml
+apiVersion: autoscaling.4pd.io/v1alpha1
+kind: LLMScaler
+metadata:
+  name: modelforge-01-glm
+  namespace: modelforge-01-glm
+spec:
+  syncPeriodSeconds: 10
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: modelforge-01-glm
+  # Emitted rather than left to the CRD default, so the CR says outright which of
+  # the two signal sources is in play -- that choice is what decides whether
+  # serverAddress below is a query API or a decision server.
+  metricProvider: Custom
+  serverAddress: "http://decision-gen.llm-scaler.svc:80"
+  minReplicas: 2
+  maxReplicas: 36
+  # The replica count comes off the decision server at serverAddress. spec.metrics
+  # is omitted rather than left in place, because the provider never reads it and
+  # a stale query sitting in the CR only invites the belief that it still matters.
+  customProvider:
+    serviceId: "modelforge-01-glm"
+    path: "/decisions"
+    # Narrows the match when the server reports this serviceId in more than one
+    # namespace. A serviceId matching several decisions is an error rather than a
+    # choice, so this is required as soon as the server can return duplicates.
+    namespace: "modelforge-01-glm"
+  scaleDown:
+    behavior: CacheAware
+    stabilizationWindowSeconds: 10
+    maxStepReplicas: 10
+---
+# Source: sglang/templates/modelroute.yaml
+apiVersion: routing.gpucluster.io/v1alpha1
+kind: ModelRoute
+metadata:
+  name: modelforge-01-glm
+  namespace: modelforge-01-glm
+  labels:
+    app: modelforge-01-glm-sglang
+  finalizers:
+    - routing.gpucluster.io/cleanup
+spec:
+  # The backend bucket: what feeds CART's workers, nginx's backend peers and
+  # monitor's service rows. Always this release's own Service, so a scale event
+  # is all it takes for every route to follow.
+  discovery:
+    service: "modelforge-01-glm/modelforge-01-glm"
+    # Emitted rather than left to autoconfig's auto-derivation: the chart already
+    # knows the port, and a fixed value keeps working if a second port is ever
+    # added to the Service (auto-derivation only handles the single-port case).
+    port: 8050
+  # Cache-aware router for THIS model, deployed by this release. CART is
+  # per-model by nature -- prefix affinity is only meaningful within one model --
+  # so it is never shared, and two ModelRoutes never name the same one.
+  cart:
+    service: "modelforge-01-glm/modelforge-01-glm-cart"
+    # Emitted rather than left to autoconfig's auto-derivation, for the same
+    # reason as discovery.port above.
+    port: 8071
+    outputConfigMap: "modelforge-01-glm/modelforge-01-glm-cart-config"
+    maxLoad: 50
+  nginx:
+    route: "modelforge-0.1"
+    outputConfigMap: "llm-route/openresty-conf"
+    service: "llm-route/openresty"
+    # Rendered verbatim into openresty's lua route table, so new tuning knobs
+    # need no chart change. Quoted because the CRD types them as strings.
+    values:
+      default_max: "50"
+      expose_routed_peer: "true"
+      kimi_normalize_default_enabled: "false"
+      tps_limit_tps: "30"
+      ttft_limit_ms: "20000"
+    # Ordered peer groups; higher priority wins, and traffic only cascades to a
+    # lower tier once every peer above it is banned. A cart tier at the top is
+    # added by the chart whenever the route has a CART and the list does not
+    # already name one.
+    peers:
+      - maxConcurrencyFromBackend: true
+        priority: 3
+        use: cart
+      - maxConcurrency: 100
+        priority: 2
+        use: backend
+      - priority: 1
+        use: backend-svc
+  monitor:
+    outputConfigMap: "monitoring/monitor-conf"
+    # Defaults to model.name, which is exactly what the chart passes to
+    # --served-model-name -- monitor matches on that string, so the two must agree.
+    model: "modelforge-01-glm"
+---
+# Source: sglang/templates/servicemonitor.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: modelforge-01-glm
+  namespace: modelforge-01-glm
+  labels:
+    app: modelforge-01-glm-sglang
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: modelforge-01-glm-sglang
+  # Copy these pod labels onto the scraped series so metric queries can scope to
+  # a single deployment (e.g. app="<release>-sglang") when several deployments
+  # serve the same model.
+  podTargetLabels:
+    - app
+  endpoints:
+    - port: http-inference
+      path: "/metrics"
+      interval: "15s"
+      scrapeTimeout: "10s"
+

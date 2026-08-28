@@ -13,6 +13,17 @@ HELMFILE   ?= helmfile
 HELM       ?= helm
 RENDER_DIR := rendered
 
+# --skip-deps suppresses the `helm repo update` + `helm dependency build` that
+# helmfile runs before every command. The sglang chart vendors CART under
+# charts/sglang/charts/cart precisely so it resolves offline (see the note in
+# Chart.yaml), so that pass reaches out to every configured chart repo, takes
+# seconds, and leaves a Chart.lock behind for a dependency that was never going
+# to be downloaded.
+#
+# Drop this flag when the chart itself moves to harbor -- at that point helmfile
+# does need a repo refresh to see a newly pushed version.
+HELMFILE_FLAGS ?= --skip-deps
+
 # Release names always come from helmfile.yaml. A second list here is exactly
 # the drift this repo is trying to stop having.
 list_releases = $(HELMFILE) list --output json | jq -r '.[].name'
@@ -31,10 +42,10 @@ verify:
 	  || echo "(cluster unreachable)"
 
 diff:
-	$(HELMFILE) diff
+	$(HELMFILE) diff $(HELMFILE_FLAGS)
 
 apply:
-	$(HELMFILE) apply
+	$(HELMFILE) apply $(HELMFILE_FLAGS)
 
 # One file per release, so a chart bump's blast radius across all three shows up
 # as an ordinary git diff instead of having to be simulated in your head.
@@ -42,7 +53,7 @@ render:
 	@rm -rf $(RENDER_DIR); mkdir -p $(RENDER_DIR)
 	@$(list_releases) | while read -r r; do \
 	  echo "  render $$r"; \
-	  $(HELMFILE) -l name=$$r template > $(RENDER_DIR)/$$r.yaml; \
+	  $(HELMFILE) -l name=$$r template $(HELMFILE_FLAGS) > $(RENDER_DIR)/$$r.yaml; \
 	done
 
 check: render

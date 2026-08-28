@@ -24,28 +24,37 @@
 #
 # So the first run is never `apply`. docs/deploy.md step 0.
 
-# ---------------------------------------------------------------------------
-# Chart source, in ONE place, so all three releases move together and a version
-# bump cannot land on one of them by accident.
-#
-# Today: the local tree. No registry involved, and helmfile renders exactly what
-# `helm install ./charts/sglang` rendered, which is what makes adoption a
-# provable no-op rather than a hopeful one.
-#
-# Once the chart is packaged and pushed to harbor (`make chart-push`), change
-# the two lines below to
-#       chart   = "hardcore/sglang"
-#       version = "0.4.2"
-# and uncomment the repositories block. `helmfile diff` must STILL come back
-# empty -- that is the check that the artifact in harbor is the same tree these
-# values were tested against. A non-empty diff there means the push was stale.
-# ---------------------------------------------------------------------------
-{{- $chart   := "charts/sglang" }}
-{{- $version := "" }}
-
 # repositories:
 #   - name: hardcore
 #     url: https://harbor.4pd.io/chartrepo/hardcore-tech
+
+# ---------------------------------------------------------------------------
+# Chart source, in ONE place, so all three releases move together and a version
+# bump cannot land on one of them by accident. Each release below merges this in
+# with `<<: *sglang`.
+#
+# A plain YAML anchor rather than a Go template variable, deliberately:
+# helmfile v1 stopped rendering helmfile.yaml as a template (only
+# helmfile.yaml.gotmpl is), so a `{{ ... }}` variable here would not be
+# substituted and the file would fail to parse. Anchors are ordinary YAML and
+# need no gotmpl rename.
+#
+# Today: the local tree. No registry involved, and helmfile renders exactly what
+# `helm install ./charts/sglang` rendered, which is what makes adoption a
+# provable no-op rather than a hopeful one. No `version:` belongs here while the
+# chart is a path -- helm has nothing to resolve it against.
+#
+# Once the chart is packaged and pushed to harbor, uncomment the repositories
+# block above and change this to
+#       chart: hardcore/sglang
+#       version: "0.4.2"
+# `helmfile diff` must STILL come back empty -- that is the check that the
+# artifact in harbor is the same tree these values were tested against. A
+# non-empty diff there means the push was stale.
+# ---------------------------------------------------------------------------
+templates:
+  sglang: &sglang
+    chart: charts/sglang
 
 helmDefaults:
   # NOT --wait. A cold load is 20-40 minutes here (startupProbe.failureThreshold
@@ -76,12 +85,9 @@ releases:
   # Identity is unambiguous here: the values header says `-n kimi` and
   # scaler.customProvider.namespace says "kimi". They agree.
   # -------------------------------------------------------------------------
-  - name: kimi-k25
+  - <<: *sglang
+    name: kimi-k25
     namespace: kimi
-    chart: {{ $chart }}
-    {{- if $version }}
-    version: "{{ $version }}"
-    {{- end }}
     labels:
       model: kimi-k25
       topology: lws
@@ -103,12 +109,9 @@ releases:
   # the scaler reads the wrong series -- so the functional field wins. Confirm
   # with `make verify` before the first apply.
   # -------------------------------------------------------------------------
-  - name: fallback-modelforge-01
+  - <<: *sglang
+    name: fallback-modelforge-01
     namespace: modelforge
-    chart: {{ $chart }}
-    {{- if $version }}
-    version: "{{ $version }}"
-    {{- end }}
     labels:
       model: fallback-modelforge
       topology: deployment
@@ -136,12 +139,9 @@ releases:
   # `make verify` before the first apply -- this is the one most likely to need
   # an edit.
   # -------------------------------------------------------------------------
-  - name: modelforge-01-glm
+  - <<: *sglang
+    name: modelforge-01-glm
     namespace: modelforge-01-glm
-    chart: {{ $chart }}
-    {{- if $version }}
-    version: "{{ $version }}"
-    {{- end }}
     labels:
       model: modelforge-01-glm
       topology: deployment
