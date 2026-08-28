@@ -1,0 +1,402 @@
+# sglang-modelforge-0.1 -- the chart form of production/glm.sh, which runs GLM-5
+# (Qwen3.6-35B-A3B-793303-glm-5) as a single `docker run` on one host: 2 GPUs,
+# --tp 2, port 8050, served as "glm-5".
+#
+#   helm install sglang-modelforge-01 ./charts/sglang -n modelforge \
+#     -f charts/sglang/production/sglang-modelforge-01.yaml
+#
+# Consult the real GitOps repo for deploy values.
+#
+# Prerequisites on every node this can land on, none of which the chart installs:
+#   - the model at model.localPath below
+#   - the merged MoE config directory at the moe-config hostPath below (glm.sh
+#     downloads and untars it into /root/deploy; on a cluster it has to be there
+#     already, see the volume's comment)
+#
+# What glm.sh does that has NO chart equivalent, listed so nothing is silently
+# lost: the auto-backup script it curls and runs, the log rotation around
+# `docker rm -f` (kubectl logs / your log shipper covers it), and the download of
+# /root/modelforge-anthropic-compat/protocol.py -- note the script fetches that
+# file but never mounts it into the container, so it is not part of this
+# workload at all. Port it deliberately if that was an oversight rather than a
+# leftover.
+
+image:
+  repository: "harbor-contest.4pd.io/lijiashu/sglang"
+  tag: "v0.5.10.post1"
+
+# 2 GPUs out of a node that has more, so bin-packing is what keeps the leftover
+# GPUs usable instead of stranded one per node.
+schedulerName: "binpack-scheduler"
+
+model:
+  # --served-model-name glm-5. This is also what the hang-watcher's active probe
+  # sends as its model, and the monitor default -- keep it equal to what callers
+  # actually ask for.
+  name: "glm-5"
+  # --mount type=bind,src=/mnt/disk0/models/modelforge/Qwen3.6-35B-A3B-793303-glm-5,dst=/model
+  # The chart mounts this itself and passes --model-path, so only the host path
+  # is needed here.
+  localPath: "/mnt/disk0/models/modelforge/Qwen3.6-35B-A3B-793303-glm-5"
+  # Kept at the script's /model rather than the chart's /models default: it costs
+  # nothing and keeps stack traces comparable with the docker deployment.
+  mountPath: "/model"
+  # --gpus "device=0,1" + --tp 2, i.e. two GPUs. On Kubernetes the pair is chosen
+  # by the device plugin, not pinned by index -- see the CUDA_VISIBLE_DEVICES
+  # note under env.
+  gpus: "2"
+  # --context-length 262144, pinned by the script rather than left to the model,
+  # so it is carried over verbatim. Quoted because 262144 as a YAML int still has
+  # to reach the command line as a string.
+  contextLength: "262144"
+
+# config.json alone would be a near-useless completeness check: in a partial
+# rsync the small JSON files land first and the multi-GB shards are exactly what
+# is missing or truncated. The weights glob is the one that catches a half-synced
+# checkpoint. Entries are ANDed, so a wrong glob blocks startup entirely -- if
+# this checkpoint stores weights as .bin, change the second one. Confirm with:
+#   ls /mnt/disk0/models/modelforge/Qwen3.6-35B-A3B-793303-glm-5
+modelCheck:
+  enabled: true
+  requiredGlobs:
+    - "config.json"
+    - "*.safetensors"
+
+service:
+  type: ClusterIP
+  # --port 8050 (the script's service name encodes it: sglang-modelforge-0.1-p8050)
+  port: 8050
+
+# Everything from the script's command line that the chart does not already
+# emit. --model-path, --served-model-name, --host, --port, --context-length and
+# --enable-metrics are added by the chart, so they are intentionally absent.
+extraArgs:
+  - "--tp=2"
+  - "--mem-fraction-static=0.85"
+  - "--radix-eviction-policy=lru"
+  # v0.5.10 spelling. This flag was renamed --mamba-radix-cache-strategy by
+  # v0.5.15 (see sglang-values-fallback-modelforge.yaml, which pins that image),
+  # and argparse EXITS on an unknown flag -- so bumping image.tag without
+  # touching this line turns into a CrashLoopBackOff that never loads the model.
+  - "--mamba-scheduler-strategy=extra_buffer"
+  - "--page-size=64"
+  - "--chunked-prefill-size=16384"
+  - "--trust-remote-code"
+  - "--enable-cache-report"
+  - "--stream-response-default-include-usage"
+  - "--reasoning-parser=qwen3"
+  - "--tool-call-parser=qwen3_coder"
+
+env:
+  # -e PYTORCH_ALLOC_CONF=expandable_segments:True
+  - name: PYTORCH_ALLOC_CONF
+    value: "expandable_segments:True"
+  # -e NCCL_DEBUG=WARN. Still worth having on one node: --tp 2 means the two
+  # GPUs talk over NCCL, and WARN is the level that stays quiet until it matters
+  # (INFO on a busy node is GBs of logs an hour, which the ephemeral-storage
+  # limit below then evicts the pod for).
+  - name: NCCL_DEBUG
+    value: "WARN"
+  # -e SGLANG_MOE_CONFIG_DIR=/moe-config -- the tuned MoE kernel configs. Points
+  # at the read-only mount further down; the two have to move together.
+  - name: SGLANG_MOE_CONFIG_DIR
+    value: "/moe-config"
+  # CUDA_VISIBLE_DEVICES=0,1 is deliberately NOT carried over. The script pins
+  # indices because it shares the host with other containers; on Kubernetes the
+  # NVIDIA device plugin sets it from the nvidia.com/gpu limit model.gpus
+  # renders, and pinning it by hand points the process at GPUs this pod was not
+  # granted.
+
+# --cap-add SYS_PTRACE --cap-add SYS_NICE, which port over 1:1 (unlike the
+# ulimits and the SELinux opt -- see the closing note).
+#   SYS_PTRACE  attaching py-spy / gdb to the engine from inside the container,
+#               which is how a wedged scheduler gets diagnosed.
+#   SYS_NICE    letting the engine set thread priorities.
+# Neither is needed to serve traffic; drop them if your PSP/PSA baseline
+# disallows added capabilities.
+securityContext:
+  capabilities:
+    add: ["SYS_PTRACE", "SYS_NICE"]
+
+volumes:
+  # --mount type=bind,src=/root/deploy/modelforge-moe-config-merged,dst=/moe-config,readonly
+  #
+  # hostPath is right here for the same reason the model is one: read-only
+  # reference data, so concurrent replicas on a node cannot corrupt it. What it
+  # costs is a scheduling constraint the cluster cannot see -- a node without
+  # this directory runs the engine with untuned MoE kernels.
+  #
+  # type: Directory, NOT DirectoryOrCreate: an empty directory handed to
+  # SGLANG_MOE_CONFIG_DIR is silently accepted and the model just runs slower,
+  # which is far harder to notice than a FailedMount at start. glm.sh populates
+  # the path from ${config_url}; on a cluster that has to be part of node prep.
+  - name: moe-config
+    hostPath:
+      path: /root/deploy/modelforge-moe-config-merged
+      type: Directory
+  # --mount src=${deploy_root}/${service_name}/.cache,dst=/root/.cache
+  #
+  # emptyDir, not the script's hostPath. The script can use a host path safely
+  # because its cache dir is named after the one service; here the scaler is free
+  # to land two replicas on one node, and two processes writing one torch/CUDA
+  # compile cache corrupt it. The cost is a cold compile cache after every pod
+  # recreation, which a restart pays anyway.
+  - name: dot-cache
+    emptyDir:
+      sizeLimit: 10Gi
+  # --ipc host, approximated. torch/NCCL need real shared memory and the default
+  # 64MB /dev/shm is not enough. medium: Memory means tmpfs, charged to the
+  # container's MEMORY rather than to ephemeral-storage.
+  - name: dshm
+    emptyDir:
+      medium: Memory
+      sizeLimit: 16Gi
+
+volumeMounts:
+  - name: moe-config
+    mountPath: /moe-config
+    readOnly: true
+  - name: dot-cache
+    mountPath: /root/.cache
+  - name: dshm
+    mountPath: /dev/shm
+
+# Only ephemeral-storage is set, because the volumes above make it concrete:
+# dot-cache can reach 10Gi, plus the writable layer and container logs, all on
+# the filesystem holding /var/lib/kubelet. Without the request the scheduler does
+# not know that and will pack replicas onto a node until its disk runs out.
+# (/model and /moe-config are hostPaths and never count; /dev/shm is tmpfs and is
+# charged to memory.)
+#
+# It has to stay strictly ABOVE the dot-cache sizeLimit, not equal to it: at
+# 10Gi/10Gi a cache sitting at its own legal maximum has already spent the whole
+# pod budget, and the next log line evicts the pod while sizeLimit never gets to
+# act as the guard rail. 16Gi = 10Gi cache + ~6Gi for the layer and logs.
+#
+# cpu and memory are deliberately unset -- the script gave no numbers to carry
+# over, and a guessed memory limit that forgets the 16Gi tmpfs above OOM-kills a
+# load that would otherwise have finished. Add them once you have measured.
+resources:
+  requests:
+    # Equal to the limit on purpose: disk is not compressible, so there is no
+    # useful "burst above the request" the way there is for cpu.
+    ephemeral-storage: 16Gi
+  limits:
+    ephemeral-storage: 16Gi
+
+# Probes hit /v1/models rather than /health, which is a property of THIS image:
+# on v0.5.10 /health answers 503 for a second or two after the load finishes, and
+# its meaning is not purely "model is up" (it can reflect backpressure).
+# /v1/models is 200 from the moment the route binds and stays there. The same
+# call is made in sglang-values-lws-multinode.yaml, which runs the same build
+# family; the v0.5.15 fallback values can and do use /health.
+#
+# The startupProbe is the important one: while it runs the kubelet does not
+# evaluate liveness or readiness at all, so a long load cannot be mistaken for a
+# hang. 15s x 80 = 20 minutes of budget for a 35B MoE loading across 2 GPUs and
+# capturing CUDA graphs. It costs nothing when startup is quick -- the probe just
+# succeeds early -- so err high rather than risk a restart loop that never lets
+# the model finish. (The multi-node values needed 40 minutes; that budget also
+# has to cover a cross-node NCCL rendezvous, which does not apply here.)
+#
+# timeoutSeconds is not optional: it defaults to 1s against a node busy loading
+# 35B of weights.
+startupProbe:
+  httpGet:
+    path: /v1/models
+    port: http
+  periodSeconds: 15
+  timeoutSeconds: 10
+  failureThreshold: 80
+
+readinessProbe:
+  httpGet:
+    path: /v1/models
+    port: http
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# No livenessProbe here on purpose. hangWatcher is on by default and the chart
+# then points liveness at the sidecar's /healthz, ignoring .Values.livenessProbe
+# entirely -- writing one would be dead config that reads like a decision.
+#
+# The sidecar is also the safer check for a model this slow to load: it tells
+# "still loading" apart from "token_progress has stalled", then confirms with a
+# real POST /v1/completions (chart fills in model.name, i.e. glm-5) before
+# reporting 503.
+hangWatcher:
+  enabled: true
+  config:
+    # A long prefill at 262144 context can legitimately freeze token_progress for
+    # a while; stay well above the longest one you expect.
+    stallSec: 300
+
+# The chart's 1800s default is below this model's startup budget (15s x 80 =
+# 1200s) once image-pull time is added, and a rollout would then be marked
+# ProgressDeadlineExceeded while the new pod is still loading exactly as
+# intended. 2400 leaves the 20 minutes plus room for pulling a multi-GB engine
+# image onto a cold node. The chart refuses to render if this drops below the
+# probe budget.
+progressDeadlineSeconds: 2400
+
+# Rolling with maxSurge: 1 (the chart default) needs 2 spare GPUs for the
+# incoming replica, since each one claims model.gpus. On a fully-booked cluster
+# the new pod stays Pending and the rollout stalls -- old pods keep serving, and
+# the deadline above is what eventually reports it. Set maxSurge: 0 /
+# maxUnavailable: 1 instead if these GPUs are always fully allocated.
+
+# Graceful shutdown, sized for this model rather than the chart's opt-125m
+# defaults. Note what terminationGracePeriodSeconds is: SGLang's post-SIGTERM
+# drain has no timeout of its own, so this is the deadline that CUTS IT OFF, not
+# a budget it stays inside.
+terminationGracePeriodSeconds: 3600
+lifecycle:
+  preStop:
+    enabled: true
+    endpointSyncSeconds: 5
+    # The bounded drain -- the hook exits early once the server reports idle.
+    # 5 + 600 + 20 = 625, well inside the 3600 above.
+    drainSeconds: 600
+    pollIntervalSeconds: 5
+  shutdownReserveSeconds: 20
+  # The draining already happened above, bounded and observable; SGLang's own
+  # post-SIGTERM drain would only repeat it without a timeout.
+  forceShutdown: true
+
+priorityClassName: "inference-prod"
+
+# The script ran on one fixed host with GPUs 0,1. On a cluster, steer the pod to
+# nodes that actually have two matching GPUs.
+#
+# The SKU list and driver pin are copied from the sibling modelforge values and
+# are the part of this file most worth confirming against the nodes that hold
+# /mnt/disk0/models/.../-glm-5 -- an affinity that matches nodes without the
+# model (or without /root/deploy/modelforge-moe-config-merged) schedules a pod
+# that cannot start.
+nodeSelector: {}
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: nvidia.com/gpu.product
+          operator: In
+          values:
+          - "NVIDIA-A100-SXM4-80GB"
+        - key: nvidia.com/cuda.driver-version.full
+          operator: In
+          values:
+          - "575.57.08"
+
+# The script is a fixed single container; the scaler is what makes this a fleet.
+# Set scaler.enabled: false to deploy it as a plain 1-replica Deployment, which
+# is the literal translation of glm.sh.
+#
+# Custom provider: the count comes off the decision server and the PromQL metrics
+# block is not read at all. Bounds are conservative on purpose -- each replica
+# claims 2 GPUs, so maxReplicas: 4 is already 8 of them. Raise it once the
+# decision server is actually driving this service.
+scaler:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 4
+  syncPeriodSeconds: 10
+  metricProvider: Custom
+  serverAddress: "http://decision-gen.llm-scaler.svc:80"
+  customProvider:
+    serviceId: "modelforge-01-glm"
+    path: "/decisions"
+    namespace: "modelforge-01-glm"
+  scaleDown:
+    behavior: CacheAware
+    # A cold start here is a 20-minute load; do not shrink on a brief dip.
+    stabilizationWindowSeconds: 300
+    # ...and give up at most one warm replica per sync period once we do.
+    maxStepReplicas: 2
+    deletionCostQuery: ''
+
+cart:
+  enabled: true
+  # CART is CPU-only and has no business occupying a GPU node.
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: nvidia.com/gpu.product
+            operator: DoesNotExist
+
+modelRoute:
+  enabled: true
+  # Matches the script's service name (sglang-modelforge-0.1-p8050 minus the
+  # port), so the openresty path and the docker deployment line up.
+  name: "modelforge-01-glm"
+  nginx:
+    outputConfigMap: "llm-route/openresty-conf"
+    service: "llm-route/openresty"
+    route: "modelforge-0.1"
+    values:
+      default_max: "50"
+      # 回显 X-Routed-Peer: <后端ip:port>|<GPU型号>|<节点名>,便于从响应直接定位到落在哪台机器。
+      # openresty 侧默认关(2026-07"不外泄内部 peer"的安全取向),按路由显式开;这里是集群内
+      # 服务,拓扑对调用方可见可接受。CART 侧已配 proxy.add_routed_peer_header=true,回的是
+      # 真实后端而非 CART 自己。
+      expose_routed_peer: "true"
+      kimi_normalize_default_enabled: "false"
+      tps_limit_tps: "30"
+      ttft_limit_ms: "20000"
+  cart:
+    maxLoad: 50
+  monitor:
+    enabled: true
+    model: modelforge-01-glm
+    outputConfigMap: monitoring/monitor-conf
+    # gpuType is deliberately left empty so autoconfig derives it from the node's
+    # nvidia.com/gpu.product label. The affinity above admits both H100 and H800,
+    # so any value hardcoded here would be wrong for half the placements.
+
+serviceMonitor:
+  enabled: true
+  path: /metrics
+  interval: 15s
+  scrapeTimeout: 10s
+  labels:
+    release: kube-prometheus-stack
+  podTargetLabels:
+    - app
+
+# ---------------------------------------------------------------------------
+# Not portable from `docker run`, listed so their absence is a decision:
+#
+#   --network host     Not needed. The Service publishes port 8050; hostNetwork
+#                      would only be required to bypass it, and it breaks the
+#                      per-pod IP that EndpointSlice-based draining relies on.
+#
+#   --ipc host         Approximated by the /dev/shm emptyDir above. True host IPC
+#                      needs `hostIPC: true`, which this chart does not expose;
+#                      the shared-memory size is the part that matters for torch.
+#                      Raise its sizeLimit if the TP pair hits shm errors.
+#
+#   --ulimit memlock=-1
+#   --ulimit stack=67108864
+#                      A Pod spec has no ulimit field. These are set on the
+#                      container runtime / kubelet (e.g. containerd's
+#                      default_ulimits), not per workload.
+#
+#   --security-opt label=disable
+#                      SELinux labelling, not exposed by this chart and a no-op
+#                      on a cluster that does not enforce SELinux. If yours does,
+#                      it belongs in the pod's seLinuxOptions, set by the
+#                      platform rather than here.
+#
+#   --runtime nvidia   Replaced by the device plugin: model.gpus renders
+#                      nvidia.com/gpu, and the runtime is the node's default.
+#
+# The entrypoint matches exactly -- the script runs
+# `python3 -m sglang.launch_server` and so does the chart.
+# ---------------------------------------------------------------------------
