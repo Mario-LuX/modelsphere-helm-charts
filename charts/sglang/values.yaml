@@ -643,6 +643,72 @@ securityContext: {}
 # Deployment pod as RDMA-enabled.
 podLabels: {}
 
+# A PodDisruptionBudget over the engine pods, so a node drain or a
+# cluster-autoscaler scale-down cannot take this model out all at once. The CART
+# subchart has its own (cart.podDisruptionBudget) and is unaffected by this.
+#
+# On by default, which is safe only because the default budget is
+# maxUnavailable: it is relative to the live replica count, so it can never
+# become unsatisfiable and never blocks a drain outright. At the chart's own
+# single-replica default it is simply a no-op (one replica, one disruption
+# allowed). Switching to minAvailable is what makes this object able to say no,
+# and that is the case to think before enabling -- see below.
+#
+# Read the header of templates/pdb.yaml before tuning this. The short version of
+# what a PDB is NOT: it does not keep replicas alive (a crash, an OOM kill or the
+# scaler scaling down are not disruptions it can refuse), and it does not govern
+# `helm upgrade` -- rollouts go through strategy / lws.rolloutStrategy instead.
+podDisruptionBudget:
+  enabled: true
+  annotations: {}
+
+  # Exactly one of minAvailable / maxUnavailable, the other left empty. The API
+  # server rejects a PDB with both or with neither, so the chart fails the render
+  # rather than let the install fail.
+  #
+  # maxUnavailable is the default here because it is the one that stays correct
+  # while the fleet resizes underneath it: "at most one at a time" means the same
+  # thing at 2 replicas and at 40, and it can never reach zero allowed
+  # disruptions, so a node drain always makes progress.
+  maxUnavailable: 1
+
+  # minAvailable is the other half, and the one to reach for when there is a
+  # floor that matters more than drain speed -- "keep at least 8 serving, take as
+  # many of the rest as you like".
+  #
+  # It has a foot-gun the chart guards against: disruptionsAllowed is
+  # (healthy - minAvailable), so a minAvailable that meets or exceeds the fleet's
+  # floor (scaler.minReplicas, or replicaCount / lws.replicas x lws.size without
+  # the scaler) allows ZERO evictions the moment the fleet is at that floor. A
+  # drain then blocks forever -- it retries rather than times out, and the scaler
+  # adds replicas for traffic, not because a drain is waiting. `minAvailable: 1`
+  # on a one-replica release is that mistake in its most common form, and
+  # rendering fails with the arithmetic spelled out.
+  #
+  # Percentages ("50%") are counted in PODS and rounded up. Under lws.enabled
+  # that is worth stopping on: pods are not groups, and half a group is not half
+  # an instance -- it is a dead one.
+  minAvailable: ""
+
+  # AlwaysAllow | IfHealthyBudget | "" (leave the API server's default,
+  # IfHealthyBudget).
+  #
+  # This is the field that decides whether a drain can ever get unstuck. Under
+  # IfHealthyBudget a pod that is not Ready may only be evicted while the budget
+  # is already satisfied -- so a fleet that is one replica short cannot be
+  # drained at all, including the very pod that is stuck. On this chart "not
+  # Ready" is also the normal state for the ~20 minutes a large model spends
+  # loading, which makes that window routine rather than exceptional.
+  #
+  # AlwaysAllow gives up nothing real in exchange: an unready pod is serving no
+  # traffic, so evicting it costs a restart, not availability.
+  #
+  # Needs Kubernetes >= 1.27 (>= 1.26 with the PDBUnhealthyPodEvictionPolicy gate
+  # on). An older API server silently drops the field, which is the old
+  # behaviour rather than an error -- set it to "" if you would rather not carry
+  # a field your cluster ignores.
+  unhealthyPodEvictionPolicy: AlwaysAllow
+
 # Deployment-only, all three: under lws.enabled the rollout is
 # lws.rolloutStrategy instead, and a LeaderWorkerSet has neither a progress
 # deadline to blow nor ReplicaSets to keep.
