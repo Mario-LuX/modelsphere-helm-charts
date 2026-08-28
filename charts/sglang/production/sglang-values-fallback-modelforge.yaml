@@ -253,9 +253,9 @@ scaler:
   scaleDown:
     behavior: CacheAware
     # A cold start on a 35B model is expensive, so do not shrink on a brief dip.
-    stabilizationWindowSeconds: 300
+    stabilizationWindowSeconds: 10
     # ...and give up at most one warm replica per sync period once we do shrink.
-    maxStepReplicas: 2
+    maxStepReplicas: 10
     deletionCostQuery: ''
 
 serviceMonitor:

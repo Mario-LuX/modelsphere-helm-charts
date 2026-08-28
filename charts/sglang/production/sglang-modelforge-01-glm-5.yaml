@@ -302,9 +302,9 @@ affinity:
 # claims 2 GPUs, so maxReplicas: 4 is already 8 of them. Raise it once the
 # decision server is actually driving this service.
 scaler:
-  enabled: false
-  minReplicas: 1
-  maxReplicas: 4
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 36
   syncPeriodSeconds: 10
   metricProvider: Custom
   serverAddress: "http://decision-gen.llm-scaler.svc:80"
@@ -315,9 +315,9 @@ scaler:
   scaleDown:
     behavior: CacheAware
     # A cold start here is a 20-minute load; do not shrink on a brief dip.
-    stabilizationWindowSeconds: 300
+    stabilizationWindowSeconds: 10
     # ...and give up at most one warm replica per sync period once we do.
-    maxStepReplicas: 2
+    maxStepReplicas: 10
     deletionCostQuery: ''
 
 cart:

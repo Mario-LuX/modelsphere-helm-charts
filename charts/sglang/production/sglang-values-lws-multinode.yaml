@@ -41,12 +41,12 @@ scaler:
     # has to be narrowed or it is an error rather than a choice.
     namespace: "kimi"
   minReplicas: 1
-  maxReplicas: 2
+  maxReplicas: 4
   syncPeriodSeconds: 10
   scaleDown:
     behavior: CacheAware
     # A group is 2 nodes and a ~10 minute cold load; do not let a brief dip take one down.
-    stabilizationWindowSeconds: 300
+    stabilizationWindowSeconds: 10
     maxStepReplicas: 2
 
 image:
