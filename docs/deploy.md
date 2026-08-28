@@ -73,11 +73,33 @@ make render && git add rendered/ && git commit -m "deploy: adopt the three sglan
 ## Day to day
 
 ```
+make releases                   # the names you can select on
 make diff                       # every release, read-only
 make apply                      # diff, then sync only what changed
-helmfile -l model=kimi-k25 diff # one model
-helmfile -l topology=lws diff   # the multi-node releases only
 ```
+
+### Selecting one or several releases
+
+Every target takes `R` (release names) or `L` (a helmfile label). `make releases`
+prints the names, `helmfile list` prints the labels.
+
+```
+make diff   R=kimi-k25                            # one
+make apply  R=kimi-k25,modelforge-01-glm          # two
+make render L=topology=lws                        # everything multi-node
+make lint   L=model=fallback-modelforge
+```
+
+`R` expands to one `-l name=...` flag per entry. That matters: helmfile ORs
+repeated `-l` flags but ANDs the terms inside a single one, so
+`-l name=a,name=b` means "named a *and* named b" and matches nothing. Going
+through `R` gives you the "or" you meant.
+
+One behaviour worth knowing: a full `make render` owns `rendered/` and prunes
+files for releases that no longer exist, while a selective one only rewrites
+what it was asked for — otherwise it would delete the renders it never
+regenerated. `make check` still looks at the whole directory either way, so a
+stale file for a release you did not select still fails.
 
 Never `helm upgrade` by hand. The point of the inventory is that the cluster has
 exactly one writer; a hand upgrade shows up as drift on the next `make diff`,
@@ -91,8 +113,10 @@ Two diffs, and they answer different questions — you want both:
   no cluster and it is where a chart bump's blast radius across all three
   releases becomes visible instead of having to be simulated in your head.
 
-CI should run `make check`, which regenerates `rendered/` and fails if the
-committed copy is stale.
+CI should run `make check` with no selection, which regenerates all of
+`rendered/` and fails if the committed copy is stale. It gates on
+`git status`, not `git diff`, so the render of a newly added release — untracked,
+and the case most worth catching — fails the check instead of slipping through.
 
 ## When the chart changes
 
