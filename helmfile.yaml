@@ -1,0 +1,149 @@
+# Every sglang release running in production, and nothing else.
+#
+# This replaces the `helm install ...` line in each values file's header comment,
+# which is where "what is deployed" used to live. Those lines drifted -- two of
+# the three now name a namespace that disagrees with the scaler's
+# customProvider.namespace in the same file. See the per-release notes below;
+# both were resolved in favour of the functional field, not the comment.
+#
+#   helmfile diff                    what would change against the live cluster
+#   helmfile apply                   diff, then sync only the releases that changed
+#   helmfile -l model=kimi-k25 diff  one model
+#   helmfile -l topology=lws diff    the multi-node releases only
+#   helmfile template                render everything (feeds `make render`)
+#
+# ADOPTING AN ALREADY-INSTALLED RELEASE
+#
+# `helmfile apply` is `helm upgrade --install` underneath, so it takes over an
+# existing release rather than creating a second one -- but only when BOTH the
+# name and the namespace match what is live. Get either wrong and the diff shows
+# a whole new release rather than a no-op, and applying that would put a second
+# engine on the same GPUs and a second ModelRoute writing the same key into
+# openresty's shared ConfigMap. docs/blue-green-migration.md is explicit about
+# why that collision is not caught by the namespace split.
+#
+# So the first run is never `apply`. docs/deploy.md step 0.
+
+# ---------------------------------------------------------------------------
+# Chart source, in ONE place, so all three releases move together and a version
+# bump cannot land on one of them by accident.
+#
+# Today: the local tree. No registry involved, and helmfile renders exactly what
+# `helm install ./charts/sglang` rendered, which is what makes adoption a
+# provable no-op rather than a hopeful one.
+#
+# Once the chart is packaged and pushed to harbor (`make chart-push`), change
+# the two lines below to
+#       chart   = "hardcore/sglang"
+#       version = "0.4.2"
+# and uncomment the repositories block. `helmfile diff` must STILL come back
+# empty -- that is the check that the artifact in harbor is the same tree these
+# values were tested against. A non-empty diff there means the push was stale.
+# ---------------------------------------------------------------------------
+{{- $chart   := "charts/sglang" }}
+{{- $version := "" }}
+
+# repositories:
+#   - name: hardcore
+#     url: https://harbor.4pd.io/chartrepo/hardcore-tech
+
+helmDefaults:
+  # NOT --wait. A cold load is 20-40 minutes here (startupProbe.failureThreshold
+  # is 160 x 15s on kimi), and --wait would either block a terminal for that long
+  # or, worse, time out and report a failure for a release that is loading fine.
+  # Readiness is watched through the probes and the route, not through helm.
+  wait: false
+  createNamespace: false
+  # Keep enough history that a rollback target still exists after a run of
+  # upgrades. Helm's own default is 10.
+  historyMax: 20
+  # Both imply --wait, so neither is available while wait is false -- and neither
+  # is wanted here anyway: "failed" for this workload usually means "still
+  # loading", and an automatic rollback of a 40-minute load is the expensive
+  # wrong answer. Recovery is an explicit `helm rollback` after looking.
+  atomic: false
+  cleanupOnFail: false
+
+releases:
+  # -------------------------------------------------------------------------
+  # Kimi K2.5 -- multi-node. One instance is a 2-pod LeaderWorkerSet group
+  # spanning 2x H100 nodes, TP8 inside a node and PP2 across the IB fabric.
+  # Needs the LWS controller, rdma-shared-dev-plugin and rdma-injector.
+  #
+  #   openresty route   kimi-k2.5
+  #   scaler serviceId  kimi-k25
+  #
+  # Identity is unambiguous here: the values header says `-n kimi` and
+  # scaler.customProvider.namespace says "kimi". They agree.
+  # -------------------------------------------------------------------------
+  - name: kimi-k25
+    namespace: kimi
+    chart: {{ $chart }}
+    {{- if $version }}
+    version: "{{ $version }}"
+    {{- end }}
+    labels:
+      model: kimi-k25
+      topology: lws
+    values:
+      - charts/sglang/production/sglang-values-lws-multinode.yaml
+
+  # -------------------------------------------------------------------------
+  # Fallback modelforge -- Qwen3.6-35B-A3B on 2 GPUs, single-node Deployment,
+  # served as "kimi". The fleet floor is high (scaler.minReplicas: 10).
+  #
+  #   openresty route   fallback-modelforge-0.1     <- dotted, it is a URL path
+  #   scaler serviceId  fallback-modelforge-01
+  #
+  # NAMESPACE IS INFERRED. Two sources disagree:
+  #   scaler.customProvider.namespace: "modelforge"   <- used here
+  #   docs/blue-green-migration.md:170: -n fallback-modelforge-01
+  # The doc line describes installing GREEN into a fresh namespace, not where
+  # blue lives, and customProvider.namespace has to match the live namespace or
+  # the scaler reads the wrong series -- so the functional field wins. Confirm
+  # with `make verify` before the first apply.
+  # -------------------------------------------------------------------------
+  - name: fallback-modelforge-01
+    namespace: modelforge
+    chart: {{ $chart }}
+    {{- if $version }}
+    version: "{{ $version }}"
+    {{- end }}
+    labels:
+      model: fallback-modelforge
+      topology: deployment
+    values:
+      - charts/sglang/production/sglang-values-fallback-modelforge.yaml
+
+  # -------------------------------------------------------------------------
+  # GLM-5 -- Qwen3.6-35B-A3B-793303-glm-5 on 2 GPUs, --tp 2, binpack-scheduler.
+  # The chart form of production/glm.sh. Needs the merged MoE config directory
+  # on every node it can land on.
+  #
+  #   openresty route   modelforge-0.1
+  #   scaler serviceId  modelforge-01-glm
+  #
+  # NAME AND NAMESPACE ARE INFERRED, and this is the least certain of the three.
+  # The values header (written in 69f22e5, the commit that added the file) says
+  #   helm install sglang-modelforge-01 ./charts/sglang -n modelforge
+  # but that same header cites a filename that does not exist
+  # (sglang-modelforge-01.yaml), so it is a stale porting note. Everything
+  # functional in the file says modelforge-01-glm instead:
+  #   scaler.customProvider.namespace: "modelforge-01-glm"
+  #   modelRoute.name:                 "modelforge-01-glm"
+  #   modelRoute.monitor.model:        modelforge-01-glm
+  # plus the commit subject, "modelforge-01-glm suit". Confirm both fields with
+  # `make verify` before the first apply -- this is the one most likely to need
+  # an edit.
+  # -------------------------------------------------------------------------
+  - name: modelforge-01-glm
+    namespace: modelforge-01-glm
+    chart: {{ $chart }}
+    {{- if $version }}
+    version: "{{ $version }}"
+    {{- end }}
+    labels:
+      model: modelforge-01-glm
+      topology: deployment
+    values:
+      - charts/sglang/production/sglang-modelforge-01-glm-5.yaml
