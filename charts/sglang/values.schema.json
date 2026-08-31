@@ -246,6 +246,20 @@
       }
     },
 
+    "sloRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "name": { "type": "string" },
+        "annotations": { "type": "object" },
+        "extraSpec": {
+          "description": "Free-form LLMSLORequirement spec fields, merged alongside serviceId. Open by design -- that schema belongs to the inference operator, not to this chart. serviceId is not among them: it comes from scaler.customProvider.serviceId, and a copy here is rejected at render time.",
+          "type": "object"
+        }
+      }
+    },
+
     "metricsMock": {
       "type": "object",
       "additionalProperties": false,

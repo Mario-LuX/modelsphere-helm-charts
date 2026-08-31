@@ -320,6 +320,10 @@ scaler:
     maxStepReplicas: 10
     deletionCostQuery: ''
 
+sloRequirement:
+  # old deploy, external managed
+  enabled: false
+
 cart:
   enabled: true
   # CART is CPU-only and has no business occupying a GPU node.

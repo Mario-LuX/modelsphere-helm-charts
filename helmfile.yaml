@@ -47,7 +47,7 @@
 # Once the chart is packaged and pushed to harbor, uncomment the repositories
 # block above and change this to
 #       chart: hardcore/sglang
-#       version: "0.4.2"
+#       version: "0.5.0"
 # `helmfile diff` must STILL come back empty -- that is the check that the
 # artifact in harbor is the same tree these values were tested against. A
 # non-empty diff there means the push was stale.

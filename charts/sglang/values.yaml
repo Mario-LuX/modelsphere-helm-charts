@@ -361,6 +361,24 @@ scaler:
     # equivalent of vllm:kv_cache_usage_perc is sglang:token_usage:
     #   deletionCostQuery: 'sglang:token_usage{__SCOPE__} * 100'
 
+# spec.serviceId is NOT set here: it is scaler.customProvider.serviceId, the one
+# id this service is known by on that server. A requirement filed under one id
+# while the scaler reads decisions under another is not a half-configured
+# service, it is two unrelated ones -- so there is one value, not two, and
+# enabling this without a Custom-provider serviceId fails the render.
+sloRequirement:
+  enabled: true
+  # CR name. Defaults to the release name; always created in the release
+  # namespace, so it comes and goes with the rest of the release.
+  name: ""
+  annotations: {}
+  # The rest of spec, passed through verbatim (latency targets and whatever else
+  # the operator grows). Open by design: that schema belongs to the inference
+  # operator, and a chart change per field would only lag it.
+  extraSpec: {}
+    # ttftMs: 20000
+    # tpotMs: 100
+
 # Deterministic scale-op simulation. When enabled, the scaler queries this mock
 # instead of real Prometheus, so you can drive scaling by hand: set `value`
 # above the target (e.g. 10 vs target 5) to scale toward maxReplicas, below it

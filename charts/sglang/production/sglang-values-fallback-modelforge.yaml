@@ -258,6 +258,10 @@ scaler:
     maxStepReplicas: 10
     deletionCostQuery: ''
 
+sloRequirement:
+  # old deploy, external managed
+  enabled: false
+
 serviceMonitor:
   enabled: true
   path: /metrics

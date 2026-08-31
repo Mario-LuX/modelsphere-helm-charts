@@ -1,0 +1,26 @@
+{{- if .Values.sloRequirement.enabled -}}
+{{- $slo := .Values.sloRequirement }}
+{{- $serviceId := (.Values.scaler.customProvider | default dict).serviceId }}
+{{- if not $serviceId }}
+{{- fail "sglang: sloRequirement.enabled requires scaler.customProvider.serviceId -- the requirement is filed under the same id the scaler reads decisions under, and there is no second place to set it. Set scaler.metricProvider: Custom with a serviceId, or turn sloRequirement off" }}
+{{- end }}
+{{- if hasKey ($slo.extraSpec | default dict) "serviceId" }}
+{{- fail "sglang: sloRequirement.extraSpec must not carry serviceId -- it comes from scaler.customProvider.serviceId, and a second copy renders a duplicate YAML key rather than an override" }}
+{{- end }}
+apiVersion: inference.x-k8s.io/v1alpha1
+kind: LLMSLORequirement
+metadata:
+  name: {{ $slo.name | default (include "sglang.fullname" .) }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Release.Name }}-sglang
+  {{- with $slo.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  serviceId: {{ $serviceId | quote }}
+  {{- with $slo.extraSpec }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+{{- end -}}
