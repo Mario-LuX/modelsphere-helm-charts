@@ -199,6 +199,14 @@ containers:
       value: {{ $root.Values.healthEndpointGeneration | quote }}
     {{- if $root.Values.lifecycle.forceShutdown }}
     # Makes SGLang skip its drain and exit as soon as SIGTERM arrives.
+    #
+    # Both spellings, because upstream renamed it and the two live side by side
+    # across the images in use: 0.5.10 still reads SGL_FORCE_SHUTDOWN but warns
+    # ("deprecated, please use SGLANG_FORCE_SHUTDOWN"), and 0.5.15 has dropped it
+    # entirely -- grep the package and the string is not there, so on 0.5.15 the
+    # old name alone is a no-op and this whole switch does nothing.
+    - name: SGLANG_FORCE_SHUTDOWN
+      value: "1"
     - name: SGL_FORCE_SHUTDOWN
       value: "1"
     {{- end }}
@@ -250,8 +258,16 @@ containers:
         command:
           - python3
           - -c
+          # Whether the hook ends by killing SGLang itself is gated per role -- a group
+          # through lws.leaderPreStopKill, since there the kill additionally has to
+          # break a collective its workers have left; a single pod through
+          # lifecycle.preStopKill. Deliberately NOT lifecycle.forceShutdown: that one
+          # asks the engine to skip its drain, which is a statement about in-flight
+          # requests, while this is about what to do when the engine does not exit at
+          # all. Wanting the fallback without giving up the drain is a legitimate
+          # combination, so they stay separate switches.
           - |
-            {{- include "sglang.preStopScript" (dict "root" $root "kill" (and $multi $lws.leaderPreStopKill)) | nindent 14 }}
+            {{- include "sglang.preStopScript" (dict "root" $root "kill" (ternary $lws.leaderPreStopKill $root.Values.lifecycle.preStopKill $multi)) | nindent 14 }}
   {{- end }}
   {{- if $serves }}
   {{- with $root.Values.startupProbe }}
@@ -379,6 +395,11 @@ tolerations:
   surviving that sleep means SGLang is wedged. At that point its CHILDREN get
   SIGKILLed -- they carry no such protection -- and their death releases the
   do_wait PID 1 is parked in, so it exits on its own.
+
+  Why the kill half exists at all: SGLang deleted mid-load misses SIGTERM (uvicorn has
+  not installed its handler yet), finishes booting, and then holds its GPUs until the
+  kubelet SIGKILLs it at terminationGracePeriodSeconds -- an hour, for these values.
+  Both roles hit that, which is why `kill` is not lws-only; the caller decides.
 
   Call it as: include "sglang.preStopScript" (dict "root" $ "kill" true)
 */}}

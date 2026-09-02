@@ -47,9 +47,8 @@ replicaCount: 1
 #      b. preStop drains until idle           [endpointSyncSeconds, drainSeconds]
 #         (gives up early if /metrics stays unreadable: nothing to drain)
 #      c. preStop SIGTERMs PID 1, waits, kills its children if it is stuck
-#                                             [leaderPreStopKill,
-#                                              shutdownReserveSeconds,
-#                                              forceShutdown]
+#                                             [leaderPreStopKill / preStopKill,
+#                                              shutdownReserveSeconds]
 #      d. kubelet SIGKILL at the grace deadline -- backstop
 #   2. worker StatefulSet GC'd (its owner is the leader POD)
 #   3. worker pods                            [workerTerminationGracePeriodSeconds]
@@ -275,10 +274,23 @@ lifecycle:
   # re-checks every 5s, then schedulers get up to 15s to exit before being
   # killed. Anything still generating past this is cut off by the kubelet.
   shutdownReserveSeconds: 20
-  # Sets SGL_FORCE_SHUTDOWN=1, which makes SGLang skip the drain and exit as
-  # soon as SIGTERM lands. Use it when you would rather drop in-flight requests
-  # than wait -- the preStop hook above still runs.
+  # Sets SGL_FORCE_SHUTDOWN=1 and SGLANG_FORCE_SHUTDOWN=1 (upstream renamed it;
+  # 0.5.10 still reads the old name but warns, 0.5.15 has dropped it), which asks
+  # SGLang to skip its drain and exit as soon as SIGTERM lands. Use it when you
+  # would rather drop in-flight requests than wait -- the preStop hook above still
+  # runs. This is a REQUEST to the engine, and an engine that never reads it -- a
+  # version that dropped the variable, or a pod deleted mid-load before the signal
+  # handler exists -- simply ignores it. preStopKill below is the enforcement.
   forceShutdown: false
+  # Whether the preStop hook ends by killing SGLang itself: SIGTERM to PID 1, then
+  # SIGKILL to its children after shutdownReserveSeconds if it is still up. Unlike
+  # forceShutdown this needs no cooperation from the engine, which is what makes it
+  # the fallback when the request above goes unheard.
+  #
+  # Applies to single-pod Deployments. The LWS path has its own switch,
+  # lws.leaderPreStopKill, because there the kill additionally has to break a
+  # collective whose workers are already gone.
+  preStopKill: true
 
 scaler:
   enabled: true

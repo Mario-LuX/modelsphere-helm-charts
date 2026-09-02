@@ -27,7 +27,19 @@ image:
 
 # 2 GPUs out of a node that has more, so bin-packing is what keeps the leftover
 # GPUs usable instead of stranded one per node.
-schedulerName: "binpack-scheduler"
+# Volcano since 2026-09-01, replacing the kube-scheduler binpack profile.
+#
+# The packing behaviour it used to get from that profile now comes from Volcano's
+# own binpack plugin, which has to be told to score GPUs -- by default it only
+# scores cpu/memory and the nodeorder plugin in the same tier pulls the other way,
+# so an unconfigured Volcano spreads these pods rather than packing them. The
+# cluster-wide config lives in volcano-system/volcano-scheduler-configmap; see
+# inference-stack-k8s scheduler/volcano/README.md.
+#
+# Note the granularity changed with it: binpack-scheduler was a kube-scheduler
+# PROFILE, so each workload picked its own. Volcano has one policy for everything
+# it schedules -- there is no per-workload knob any more.
+schedulerName: "volcano"
 
 model:
   # --served-model-name glm-5. This is also what the hang-watcher's active probe
