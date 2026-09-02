@@ -197,7 +197,8 @@
           }
         },
         "shutdownReserveSeconds": { "type": "integer", "minimum": 0 },
-        "forceShutdown": { "type": "boolean" }
+        "forceShutdown": { "type": "boolean" },
+        "preStopKill": { "type": "boolean" }
       }
     },
 

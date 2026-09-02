@@ -15,6 +15,25 @@
 #     HCAs are a per-node answer.
 #   - the model already on both nodes at model.localPath
 
+# Volcano, so the two pods of a group are admitted together or not at all.
+#
+# Without it the default scheduler places them one at a time, and on a full-ish
+# cluster the leader takes the last whole 8-GPU machine while the worker finds
+# none -- a group that holds 8 cards it cannot serve from and never recovers on
+# its own. Measured on the test cluster: 8 GPUs held, unchanged after 180s.
+# With Volcano the same setup leaves both pods Pending and 0 cards taken, and the
+# whole group is admitted 160s after capacity comes back.
+#
+# Requires the LWS controller to run with gangSchedulingManagement.schedulerProvider
+# volcano (see inference-stack-k8s nvidia/lws/default.yaml) -- the controller is
+# what creates the PodGroup this then schedules against. Turning this on here
+# alone does nothing.
+#
+# What it costs: a group that loses its machines no longer holds anything, so if
+# small pods are queued when capacity frees up they can take it card by card and
+# leave the group queued indefinitely. See docs/volcano/upgrade-kimi.md.
+schedulerName: volcano
+
 lws:
   enabled: true
   # 2 nodes per instance. One leader (rank 0, serves the API) + one worker.
