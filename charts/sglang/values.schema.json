@@ -299,6 +299,16 @@
         "enabled": { "type": "boolean" },
         "name": { "type": "string" },
         "annotations": { "type": "object" },
+        "slo": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "description": "metadata.name of the LLMSLORequirement whose thresholds replace the static ttft_limit_ms / tps_limit_tps. \"ns/name\" crosses namespaces; empty keeps the static values.",
+              "type": "string"
+            }
+          }
+        },
         "discovery": {
           "type": "object",
           "additionalProperties": false,
