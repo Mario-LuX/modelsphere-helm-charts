@@ -45,6 +45,14 @@ cart:
 
 modelRoute:
   enabled: true
+  # 限流阈值来自 LLMSLORequirement(inference.x-k8s.io),取代下面 nginx.values 里的
+  # 静态 ttft_limit_ms / tps_limit_tps。留空则继续用静态值。
+  # 引用 modelforge ns 里的 LLMSLORequirement。当前 CR 的值(ttft p80=20s / otps p80=30)
+  # 与下面 nginx.values 的静态阈值(20000ms / 30)**完全一致**,所以切过来行为不变 ——
+  # 变的是阈值的来源:以后调限流改 CR,不再改这份 values + 重新部署。
+  slo:
+    name: "fallback-modelforge-01"
+
   nginx:
     outputConfigMap: "llm-route/openresty-conf"
     service: "llm-route/openresty"

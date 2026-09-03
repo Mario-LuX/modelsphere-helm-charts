@@ -352,6 +352,13 @@ modelRoute:
   # Matches the script's service name (sglang-modelforge-0.1-p8050 minus the
   # port), so the openresty path and the docker deployment line up.
   name: "modelforge-01-glm"
+  # 限流阈值来自 LLMSLORequirement(inference.x-k8s.io),取代下面 nginx.values 里的
+  # 静态 ttft_limit_ms / tps_limit_tps。留空则继续用静态值。
+  # 引用同 ns 的 LLMSLORequirement。
+  # ⚠️ 与下面的静态阈值差异较大:**ttft 20000ms → 30s、otps 30 → 10**,两项都放松。
+  slo:
+    name: "modelforge-01-glm"
+
   nginx:
     outputConfigMap: "llm-route/openresty-conf"
     service: "llm-route/openresty"

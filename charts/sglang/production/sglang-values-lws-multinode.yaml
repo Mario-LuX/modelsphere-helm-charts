@@ -315,6 +315,14 @@ cart:
 modelRoute:
   enabled: true
   name: "kimi-k2.5"
+  # 限流阈值来自 LLMSLORequirement(inference.x-k8s.io),取代下面 nginx.values 里的
+  # 静态 ttft_limit_ms / tps_limit_tps。留空则继续用静态值。
+  # 引用 kimi ns 里的 LLMSLORequirement(注意 CR 名是 kimi-k25,不是 kimi-k2.5)。
+  # ⚠️ 与下面的静态阈值有差异:ttft 20s 一致,**otps 30 → 15,限流放松一半**。
+  # 也就是说 OTPS 低于 15 tok/s 才判违约(此前是 30)。
+  slo:
+    name: "kimi-k25"
+
   nginx:
     outputConfigMap: "llm-route/openresty-conf"
     service: "llm-route/openresty"

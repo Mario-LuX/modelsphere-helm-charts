@@ -505,6 +505,22 @@ modelRoute:
     # either way.
     includeNotReady: false
 
+  # Rate-limit thresholds from an LLMSLORequirement (inference.x-k8s.io) instead
+  # of the static ttft_limit_ms / tps_limit_tps in nginx.values below.
+  #
+  # Empty (the default) is NOT "no limits": the engine keeps using the static
+  # values. Naming a CR here hands the thresholds to whoever owns that CR, which
+  # may loosen or tighten the current limits -- compare both before switching a
+  # live route over.
+  #
+  # Requires autoconfig >= 0.3.34 (older ones do not know spec.slo, and the API
+  # server silently drops the field) and an openresty image that understands
+  # ttft_metrics / tps_metrics (older engines ignore the keys and stay static).
+  slo:
+    # metadata.name of the LLMSLORequirement. "ns/name" for another namespace;
+    # a bare name means this release's namespace. Empty = don't use one.
+    name: ""
+
   # The openresty (nginx) route. This is the only required section.
   nginx:
     # Defaults to the ModelRoute name above. It becomes the conf file name, the
