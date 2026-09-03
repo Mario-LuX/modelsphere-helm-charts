@@ -396,6 +396,14 @@ spec:
           - name: SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION
             value: "false"
           # Makes SGLang skip its drain and exit as soon as SIGTERM arrives.
+          #
+          # Both spellings, because upstream renamed it and the two live side by side
+          # across the images in use: 0.5.10 still reads SGL_FORCE_SHUTDOWN but warns
+          # ("deprecated, please use SGLANG_FORCE_SHUTDOWN"), and 0.5.15 has dropped it
+          # entirely -- grep the package and the string is not there, so on 0.5.15 the
+          # old name alone is a no-op and this whole switch does nothing.
+          - name: SGLANG_FORCE_SHUTDOWN
+            value: "1"
           - name: SGL_FORCE_SHUTDOWN
             value: "1"
           - name: NVIDIA_DISABLE_REQUIRE
@@ -427,8 +435,16 @@ spec:
               command:
                 - python3
                 - -c
+                # Whether the hook ends by killing SGLang itself is gated per role -- a group
+                # through lws.leaderPreStopKill, since there the kill additionally has to
+                # break a collective its workers have left; a single pod through
+                # lifecycle.preStopKill. Deliberately NOT lifecycle.forceShutdown: that one
+                # asks the engine to skip its drain, which is a statement about in-flight
+                # requests, while this is about what to do when the engine does not exit at
+                # all. Wanting the fallback without giving up the drain is a legitimate
+                # combination, so they stay separate switches.
                 - |
-                    import time, urllib.request
+                    import time, urllib.request, os, signal
                     
                     METRICS = "http://127.0.0.1:8050/metrics"
                     # What SGLang is working on right now, plus what is queued up.
@@ -497,6 +513,27 @@ spec:
                         time.sleep(5)
                     else:
                         log("drain deadline reached after 600s, requests may still be in flight")
+                    
+                    # Drained (or out of time). Drive the shutdown from here rather than let the
+                    # kubelet's SIGTERM find SGLang blocked in a collective its workers will never
+                    # join. SIGTERM reaches PID 1 because SGLang installs a handler for it; SIGKILL
+                    # never would. See the comment above this script.
+                    log("SIGTERM -> PID 1")
+                    os.kill(1, signal.SIGTERM)
+                    
+                    # If PID 1 exits, the kernel tears down the PID namespace and this hook dies with
+                    # it -- so getting past this sleep means SGLang is stuck in its own drain.
+                    time.sleep(20)
+                    
+                    log("still up after 20s -- killing PID 1's children to release its do_wait")
+                    keep = (1, os.getpid(), os.getppid())
+                    for entry in os.listdir("/proc"):
+                        if not entry.isdigit() or int(entry) in keep:
+                            continue
+                        try:
+                            os.kill(int(entry), signal.SIGKILL)
+                        except OSError:
+                            pass
         # While this is running the kubelet suppresses the other two probes, so a
         # slow model load cannot trip a restart. Its
         # failureThreshold x periodSeconds is the entire startup budget.
@@ -572,7 +609,7 @@ spec:
           medium: Memory
           sizeLimit: 16Gi
         name: dshm
-      schedulerName: binpack-scheduler
+      schedulerName: volcano
       priorityClassName: inference-prod
       affinity:
         nodeAffinity:
@@ -619,8 +656,11 @@ spec:
     serviceId: "fallback-modelforge-01"
     path: "/decisions"
     # Narrows the match when the server reports this serviceId in more than one
-    # namespace. A serviceId matching several decisions is an error rather than a
-    # choice, so this is required as soon as the server can return duplicates.
+    # namespace -- a serviceId matching several decisions is an error rather than
+    # a choice. Unset in values, it is this release's own namespace rather than
+    # nothing: a decision filed elsewhere in the cluster under the same id is not
+    # this deployment's, so leaving the match open could only ever pick a wrong
+    # one. Emitted always, so the CR says which namespace it is following.
     namespace: "modelforge"
   scaleDown:
     behavior: CacheAware
@@ -682,6 +722,22 @@ spec:
         use: backend
       - priority: 1
         use: backend-svc
+  # Rate-limit thresholds from an LLMSLORequirement (inference.x-k8s.io), instead
+  # of the static ttft_limit_ms / tps_limit_tps in nginx.values above. Autoconfig
+  # translates the CR into ttft_metrics / tps_metrics and renders them into the
+  # same route conf; the engine prefers those over the static values.
+  #
+  # This is a reference by metadata.name, not a switch: the CR belongs to whoever
+  # sets the SLO (autoscaler consumes the same object for replica decisions), so
+  # the chart names it rather than restating its contents. "ns/name" crosses
+  # namespaces; a bare name means this release's namespace.
+  #
+  # Leaving it empty is not "no SLO enforcement" -- it means the engine keeps
+  # using the static thresholds in nginx.values. Setting it can therefore LOOSEN
+  # or TIGHTEN the limits, depending on what the CR says; check both before
+  # switching a live route over.
+  slo:
+    name: "fallback-modelforge-01"
   monitor:
     outputConfigMap: "monitoring/monitor-conf"
     # Defaults to model.name, which is exactly what the chart passes to

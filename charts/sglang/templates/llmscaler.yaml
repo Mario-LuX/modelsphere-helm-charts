@@ -97,12 +97,13 @@ spec:
     {{- with $cp.path }}
     path: {{ . | quote }}
     {{- end }}
-    {{- with $cp.namespace }}
     # Narrows the match when the server reports this serviceId in more than one
-    # namespace. A serviceId matching several decisions is an error rather than a
-    # choice, so this is required as soon as the server can return duplicates.
-    namespace: {{ . | quote }}
-    {{- end }}
+    # namespace -- a serviceId matching several decisions is an error rather than
+    # a choice. Unset in values, it is this release's own namespace rather than
+    # nothing: a decision filed elsewhere in the cluster under the same id is not
+    # this deployment's, so leaving the match open could only ever pick a wrong
+    # one. Emitted always, so the CR says which namespace it is following.
+    namespace: {{ $cp.namespace | default .Release.Namespace | quote }}
   {{- else }}
   metrics:
     {{- range $s.metrics }}

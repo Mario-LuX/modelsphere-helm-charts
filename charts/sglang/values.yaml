@@ -1,19 +1,9 @@
-# Names every resource this chart owns. Empty means the release name, unadorned.
+# override the name of most resources in current chart, except for:
 #
-# Set it ONLY to keep an existing release's engine Deployment where it is: before
-# the resource names were simplified it was <release>-sglang, and renaming a live
-# Deployment is a delete-and-create, not a rolling update -- on a GPU node the
-# replacement cannot schedule until the old pod releases its GPU, so the upgrade
-# costs the grace period plus a cold model load. Pinning
+# - LWS servce name goes to '<fullnameOverride>-leader', since the lws StatefulSet create the '<fullnameOverride>' svc
 #
-#   fullnameOverride: <release>-sglang
-#
-# makes that upgrade ordinary. It does not restore the older Service
-# (<release>-sglang-svc) or LLMScaler (<release>-scaler), whose suffixes differed --
-# one value cannot be three names. Both are recreated either way, costing a new
-# ClusterIP and an operator re-adopt but no pod restart.
-#
-# The metrics mock and the CART subchart keep their own names and ignore this.
+# By convention: <fullnameOverride> is the serviceId in sloRequirement, which used in scaler.customProvider, modelroute etc.
+# not enforced in this chart
 fullnameOverride: ""
 
 # Only used when scaler.enabled is false. With the scaler on, the chart omits
@@ -332,9 +322,15 @@ scaler:
     # empty here so that default stands rather than being restated.
     path: ""
     # Narrows the match to decisions carrying this namespace, for a server that
-    # reports the same serviceId in several. Empty means serviceId alone selects
-    # the decision -- and a serviceId matching more than one is an error rather
-    # than a choice, so set this if the server can ever report duplicates.
+    # reports the same serviceId in several -- a serviceId matching more than one
+    # decision is an error rather than a choice.
+    #
+    # Empty (the default) means the RELEASE namespace, the one this deployment
+    # actually runs in, so a duplicate id reported from elsewhere in the cluster
+    # can never be the decision this scaler reads. Set it only when the server
+    # files this service's decisions under some other namespace than the one it
+    # is installed in; there is no way to ask for an unnarrowed match, because a
+    # decision for another namespace is not this release's to follow.
     namespace: ""
   # Required (and non-empty) under the Prometheus provider; ignored entirely
   # under Custom, which gets its recommendation from the decision server.
@@ -373,11 +369,7 @@ scaler:
     # equivalent of vllm:kv_cache_usage_perc is sglang:token_usage:
     #   deletionCostQuery: 'sglang:token_usage{__SCOPE__} * 100'
 
-# spec.serviceId is NOT set here: it is scaler.customProvider.serviceId, the one
-# id this service is known by on that server. A requirement filed under one id
-# while the scaler reads decisions under another is not a half-configured
-# service, it is two unrelated ones -- so there is one value, not two, and
-# enabling this without a Custom-provider serviceId fails the render.
+# spec.serviceId is NOT set here: it is scaler.customProvider.serviceId
 sloRequirement:
   enabled: true
   # CR name. Defaults to the release name; always created in the release
