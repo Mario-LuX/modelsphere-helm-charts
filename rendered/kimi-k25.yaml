@@ -938,20 +938,6 @@ spec:
         use: backend
       - priority: 1
         use: backend-svc
-  # Rate-limit thresholds from an LLMSLORequirement (inference.x-k8s.io), instead
-  # of the static ttft_limit_ms / tps_limit_tps in nginx.values above. Autoconfig
-  # translates the CR into ttft_metrics / tps_metrics and renders them into the
-  # same route conf; the engine prefers those over the static values.
-  #
-  # This is a reference by metadata.name, not a switch: the CR belongs to whoever
-  # sets the SLO (autoscaler consumes the same object for replica decisions), so
-  # the chart names it rather than restating its contents. "ns/name" crosses
-  # namespaces; a bare name means this release's namespace.
-  #
-  # Leaving it empty is not "no SLO enforcement" -- it means the engine keeps
-  # using the static thresholds in nginx.values. Setting it can therefore LOOSEN
-  # or TIGHTEN the limits, depending on what the CR says; check both before
-  # switching a live route over.
   slo:
     name: "kimi-k25"
   monitor:

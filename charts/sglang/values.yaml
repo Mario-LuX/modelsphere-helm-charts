@@ -1,10 +1,12 @@
 # override the name of most resources in current chart, except for:
 #
 # - LWS servce name goes to '<fullnameOverride>-leader', since the lws StatefulSet create the '<fullnameOverride>' svc
-#
-# By convention: <fullnameOverride> is the serviceId in sloRequirement, which used in scaler.customProvider, modelroute etc.
-# not enforced in this chart
 fullnameOverride: ""
+
+# global serviceId used for modelroute, sloRequirement and scaler (with custom provider)
+# default to sglang.fullname if not set
+# each ussage is allowed to override this
+serviceId: ""
 
 # Only used when scaler.enabled is false. With the scaler on, the chart omits
 # spec.replicas entirely so the operator can own it (see deployment.yaml), and
@@ -314,9 +316,7 @@ scaler:
 
   # Only read when metricProvider is Custom; ignored otherwise.
   customProvider:
-    # REQUIRED under Custom. Names the service whose decision to read. Sent as
-    # the serviceId query parameter, and matched against decisions[].serviceId in
-    # the reply -- the server is free to answer with more than it was asked for.
+    # serviceId override
     serviceId: ""
     # Request path on serverAddress. The CRD defaults it to /decisions; left
     # empty here so that default stands rather than being restated.
@@ -369,12 +369,10 @@ scaler:
     # equivalent of vllm:kv_cache_usage_perc is sglang:token_usage:
     #   deletionCostQuery: 'sglang:token_usage{__SCOPE__} * 100'
 
-# spec.serviceId is NOT set here: it is scaler.customProvider.serviceId
 sloRequirement:
   enabled: true
-  # CR name. Defaults to the release name; always created in the release
-  # namespace, so it comes and goes with the rest of the release.
   name: ""
+  serviceId: ""
   annotations: {}
   # The rest of spec, passed through verbatim (latency targets and whatever else
   # the operator grows). Open by design: that schema belongs to the inference
@@ -497,20 +495,10 @@ modelRoute:
     # either way.
     includeNotReady: false
 
-  # Rate-limit thresholds from an LLMSLORequirement (inference.x-k8s.io) instead
-  # of the static ttft_limit_ms / tps_limit_tps in nginx.values below.
-  #
-  # Empty (the default) is NOT "no limits": the engine keeps using the static
-  # values. Naming a CR here hands the thresholds to whoever owns that CR, which
-  # may loosen or tighten the current limits -- compare both before switching a
-  # live route over.
-  #
-  # Requires autoconfig >= 0.3.34 (older ones do not know spec.slo, and the API
-  # server silently drops the field) and an openresty image that understands
-  # ttft_metrics / tps_metrics (older engines ignore the keys and stay static).
   slo:
-    # metadata.name of the LLMSLORequirement. "ns/name" for another namespace;
-    # a bare name means this release's namespace. Empty = don't use one.
+    # Off keeps the static ttft_limit_ms / tps_limit_tps in nginx.values.
+    enabled: true
+    # aka serviceId
     name: ""
 
   # The openresty (nginx) route. This is the only required section.

@@ -50,6 +50,10 @@
     },
 
     "fullnameOverride": { "type": "string" },
+    "serviceId": {
+      "description": "The id this service is known by outside the cluster's object graph -- the one string the decision server, the SLO operator and the route all index it under. Not a Kubernetes name, and never looked up from an object. Empty means sglang.fullname. Supplies the default for scaler.customProvider.serviceId, sloRequirement.serviceId, sloRequirement.name and modelRoute.slo.name, each of which can still be set on its own.",
+      "type": "string"
+    },
     "replicaCount": { "type": "integer", "minimum": 0 },
     "healthEndpointGeneration": { "type": "boolean" },
     "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0 },
@@ -252,10 +256,17 @@
       "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean" },
-        "name": { "type": "string" },
+        "serviceId": {
+          "description": "spec.serviceId -- who the requirement is filed for. Empty means the top-level serviceId.",
+          "type": "string"
+        },
+        "name": {
+          "description": "metadata.name of the CR. Empty means the top-level serviceId, which is also what modelRoute.slo.name defaults to, so the route's reference resolves to this object.",
+          "type": "string"
+        },
         "annotations": { "type": "object" },
         "extraSpec": {
-          "description": "Free-form LLMSLORequirement spec fields, merged alongside serviceId. Open by design -- that schema belongs to the inference operator, not to this chart. serviceId is not among them: it comes from scaler.customProvider.serviceId, and a copy here is rejected at render time.",
+          "description": "Free-form LLMSLORequirement spec fields, merged alongside serviceId. Open by design -- that schema belongs to the inference operator, not to this chart. serviceId is not among them: it comes from sloRequirement.serviceId, and a copy here is rejected at render time.",
           "type": "object"
         }
       }
@@ -303,8 +314,12 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "enabled": {
+              "description": "Reference an LLMSLORequirement at all. Off omits spec.slo and keeps the static ttft_limit_ms / tps_limit_tps.",
+              "type": "boolean"
+            },
             "name": {
-              "description": "metadata.name of the LLMSLORequirement whose thresholds replace the static ttft_limit_ms / tps_limit_tps. \"ns/name\" crosses namespaces; empty keeps the static values.",
+              "description": "metadata.name of the LLMSLORequirement whose thresholds replace the static ttft_limit_ms / tps_limit_tps. \"ns/name\" crosses namespaces. Empty means the top-level serviceId.",
               "type": "string"
             }
           }

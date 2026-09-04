@@ -1,6 +1,7 @@
 # A example values setup for fallback modelforge.
 # Consult real GitOps repo for deploy values
 
+serviceId: "fallback-modelforge-01"
 image:
   # harbor.4pd.io/hardcore-tech/sglang:v0.5.15-cu129
   repository: "harbor.4pd.io/hardcore-tech/sglang"
@@ -51,7 +52,7 @@ modelRoute:
   # 与下面 nginx.values 的静态阈值(20000ms / 30)**完全一致**,所以切过来行为不变 ——
   # 变的是阈值的来源:以后调限流改 CR,不再改这份 values + 重新部署。
   slo:
-    name: "fallback-modelforge-01"
+    enabled: true
 
   nginx:
     outputConfigMap: "llm-route/openresty-conf"
@@ -267,7 +268,6 @@ scaler:
   metricProvider: Custom
   serverAddress: "http://decision-gen.llm-scaler.svc:80"
   customProvider:
-    serviceId: "fallback-modelforge-01"
     path: "/decisions"
     namespace: "modelforge"
   scaleDown:

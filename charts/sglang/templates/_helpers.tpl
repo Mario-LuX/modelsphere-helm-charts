@@ -30,6 +30,11 @@
 {{- .Values.fullnameOverride | default .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- define "sglang.serviceId" -}}
+{{- $id := .Values.serviceId | default (include "sglang.fullname" .) -}}
+{{- $id -}}
+{{- end -}}
+
 {{- define "sglang.serviceName" -}}
 {{- $name := include "sglang.fullname" . -}}
 {{- if .Values.lws.enabled -}}

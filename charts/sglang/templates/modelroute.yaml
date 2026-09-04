@@ -1,29 +1,11 @@
 {{- if .Values.modelRoute.enabled -}}
-{{/*
-  ModelRoute (routing.gpucluster.io/v1alpha1) -- hands this deployment's pods to
-  autoconfig, which keeps openresty's peers and the CART workers in sync as
-  replicas come and go. Requires the CRD from the autoconfig chart; without it
-  `helm install` fails with "no matches for kind ModelRoute".
-
-  The CR lands in the release namespace, next to the Deployment it describes, so
-  it comes and goes with the rest of the release.
-
-  Discovery is not configurable: it is always this release's own Service on
-  service.port, written fully qualified ("<ns>/<name>") to match the
-  cross-namespace references below. That is the whole point of routing from the
-  chart that owns the Deployment -- the two cannot drift, and no one has to
-  restate a name the chart already knows.
-
-  monitor.model is derived the same way, from model.name -- the value the chart
-  passes to --served-model-name, which is the string monitor matches on.
-
-  The CRD carries CEL rules that reject a contradictory spec, but they name CR
-  fields (spec.cart, nginx.peers) rather than the values keys below, and they
-  only fire once the manifest reaches the API server. The block below checks the
-  same things at render time and points at the values key to fix.
-*/}}
 {{- $mr := .Values.modelRoute }}
 {{- $ownSvc := printf "%s/%s" .Release.Namespace (include "sglang.serviceName" .) }}
+
+{{- $sloName := "" }}
+{{- if $mr.slo.enabled }}
+{{- $sloName = $mr.slo.name | default (include "sglang.serviceId" .) }}
+{{- end }}
 
 {{- /* Is there a CART in this route? cart.enabled is the whole answer, and the
        only switch: it deploys the CART (the vendored subchart in charts/cart)
@@ -187,21 +169,7 @@ spec:
     # already name one.
     peers:
       {{- toYaml $peers | nindent 6 }}
-  {{- with $mr.slo.name }}
-  # Rate-limit thresholds from an LLMSLORequirement (inference.x-k8s.io), instead
-  # of the static ttft_limit_ms / tps_limit_tps in nginx.values above. Autoconfig
-  # translates the CR into ttft_metrics / tps_metrics and renders them into the
-  # same route conf; the engine prefers those over the static values.
-  #
-  # This is a reference by metadata.name, not a switch: the CR belongs to whoever
-  # sets the SLO (autoscaler consumes the same object for replica decisions), so
-  # the chart names it rather than restating its contents. "ns/name" crosses
-  # namespaces; a bare name means this release's namespace.
-  #
-  # Leaving it empty is not "no SLO enforcement" -- it means the engine keeps
-  # using the static thresholds in nginx.values. Setting it can therefore LOOSEN
-  # or TIGHTEN the limits, depending on what the CR says; check both before
-  # switching a live route over.
+  {{- with $sloName }}
   slo:
     name: {{ . | quote }}
   {{- end }}
