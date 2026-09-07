@@ -62,7 +62,7 @@ helmDefaults:
   # or, worse, time out and report a failure for a release that is loading fine.
   # Readiness is watched through the probes and the route, not through helm.
   wait: false
-  createNamespace: false
+  createNamespace: true
   # Keep enough history that a rollback target still exists after a run of
   # upgrades. Helm's own default is 10.
   historyMax: 20
@@ -72,6 +72,8 @@ helmDefaults:
   # wrong answer. Recovery is an explicit `helm rollback` after looking.
   atomic: false
   cleanupOnFail: false
+  diffArgs:
+    - --three-way-merge
 
 releases:
   # -------------------------------------------------------------------------
@@ -147,3 +149,12 @@ releases:
       topology: deployment
     values:
       - deploys/production/sglang-modelforge-01-glm-5.yaml
+
+  - <<: *sglang
+    name: vllm-mock
+    namespace: vllm-mock
+    labels:
+      model: nothing
+      topology: deployment
+    values:
+      - ./deploys/examples/values-mock.yaml

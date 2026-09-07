@@ -1,0 +1,63 @@
+# A mock LLM server in place of SGLang: no GPU, no weights, no engine image.
+# Everything else in the chart behaves as usual, which is the point -- routing,
+# probes, the preStop drain and scale-ops can be exercised on any node.
+#
+#   helm install mock ./charts/sglang -f ./charts/sglang/values-mock.yaml
+#
+# The mock below is stdlib python and runs out of the box. To use your own image
+# instead, replace `image` and `commandOverride`; the rest of this file is what
+# actually frees the pod from SGLang.
+
+image:
+  repository: harbor.4pd.io/hardcore-tech/startllm-mock-server
+  tag: "1.0"
+
+model:
+  # Reported by /v1/models, and the key monitor files this service under.
+  name: mock-model
+  # No weights: no hostPath, no mount.
+  localPath: ""
+  # No nvidia.com/gpu on the pod at all, so it schedules anywhere.
+  gpus: ""
+
+# Its own switch, and there is no model volume here for it to inspect.
+modelCheck:
+  enabled: false
+
+env:
+  - name: MODEL_NAME
+    value: mock-model
+
+commandOverride: []
+hangWatcher:
+  enabled: false
+
+lifecycle:
+  preStop:
+    enabled: false
+
+
+scaler:
+  enabled: false
+serviceMonitor:
+  enabled: false
+sloRequirement:
+  enabled: false
+
+cart:
+  enabled: true
+
+readinessProbe:
+  httpGet:
+    path: /v1/models
+    port: http
+
+livenessProbe:
+  httpGet:
+    path: /v1/models
+    port: http
+
+startupProbe:
+  httpGet:
+    path: /v1/models
+    port: http

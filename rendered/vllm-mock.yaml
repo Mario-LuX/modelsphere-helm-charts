@@ -1,0 +1,342 @@
+---
+# Source: sglang/charts/cart/templates/pdb.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vllm-mock-cart
+  namespace: vllm-mock
+  labels:
+    helm.sh/chart: cart-0.1.2
+    app.kubernetes.io/name: cart
+    app.kubernetes.io/instance: vllm-mock
+    app.kubernetes.io/version: "v0.6.2-k8s"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cart
+      app.kubernetes.io/instance: vllm-mock
+
+---
+# Source: sglang/templates/pdb.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vllm-mock
+  namespace: vllm-mock
+  labels:
+    app: vllm-mock-sglang
+spec:
+  maxUnavailable: 1
+  # AlwaysAllow lets a pod that has never been Ready be evicted even while the
+  # budget is unmet. Without it (the API default, IfHealthyBudget) a fleet that
+  # is already short one replica cannot be drained at all -- and on this chart
+  # "not Ready" is the normal state for the ~20 minutes a large model spends
+  # loading, so the window where that bites is not a corner case.
+  # Requires Kubernetes >= 1.27 (>= 1.26 behind a feature gate); an older API
+  # server drops the field rather than failing, leaving the default behaviour.
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      # Every engine pod of this release: the Deployment's, or -- under
+      # lws.enabled -- both roles of every group. See the note above on why
+      # workers are in here.
+      app: vllm-mock-sglang
+---
+# Source: sglang/charts/cart/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vllm-mock-cart
+  namespace: vllm-mock
+  labels:
+    helm.sh/chart: cart-0.1.2
+    app.kubernetes.io/name: cart
+    app.kubernetes.io/instance: vllm-mock
+    app.kubernetes.io/version: "v0.6.2-k8s"
+    app.kubernetes.io/managed-by: Helm
+
+---
+# Source: sglang/charts/cart/templates/configmap.yaml
+# cart-config:chart 建初值(config.yaml,含 server 块 + 初始 workers),autoconfig 更新
+# (autoconfig 只重填 workers 段;Helm 3 三方合并:模板不变时 upgrade 不覆盖 autoconfig 写的 live 值)。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vllm-mock-cart-config
+  namespace: vllm-mock
+  labels:
+    helm.sh/chart: cart-0.1.2
+    app.kubernetes.io/name: cart
+    app.kubernetes.io/instance: vllm-mock
+    app.kubernetes.io/version: "v0.6.2-k8s"
+    app.kubernetes.io/managed-by: Helm
+data:
+  config.yaml: |
+    server:
+      host: "0.0.0.0"
+      port: 8071
+    cache:
+      threshold: 0.3
+    health:
+      endpoint: "/health"
+      interval_secs: 10
+    proxy:
+      add_routed_peer_header: true   # 回 x-routed-peer 头 → openresty forwarded_to 得真实后端 → bodylog 按后端聚合 → monitor per-model TPM 生效(其余 proxy 字段 serde 默认,含 connect_timeout_secs=2)
+    workers: []
+    
+
+---
+# Source: sglang/charts/cart/templates/rbac.yaml
+# ha-gate 需要:管自己那把 Lease(选举)+ patch 自己 pod 的 active 标签(门控 Service)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vllm-mock-cart-ha
+  namespace: vllm-mock
+  labels:
+    helm.sh/chart: cart-0.1.2
+    app.kubernetes.io/name: cart
+    app.kubernetes.io/instance: vllm-mock
+    app.kubernetes.io/version: "v0.6.2-k8s"
+    app.kubernetes.io/managed-by: Helm
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "patch"]
+
+---
+# Source: sglang/charts/cart/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vllm-mock-cart-ha
+  namespace: vllm-mock
+  labels:
+    helm.sh/chart: cart-0.1.2
+    app.kubernetes.io/name: cart
+    app.kubernetes.io/instance: vllm-mock
+    app.kubernetes.io/version: "v0.6.2-k8s"
+    app.kubernetes.io/managed-by: Helm
+subjects:
+  - kind: ServiceAccount
+    name: vllm-mock-cart
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: vllm-mock-cart-ha
+
+---
+# Source: sglang/charts/cart/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-mock-cart
+  namespace: vllm-mock
+  labels:
+    helm.sh/chart: cart-0.1.2
+    app.kubernetes.io/name: cart
+    app.kubernetes.io/instance: vllm-mock
+    app.kubernetes.io/version: "v0.6.2-k8s"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: cart
+    app.kubernetes.io/instance: vllm-mock
+    cart-active: "true"   # 只选 leader pod(ha-gate 打的 active 标签)
+  ports:
+    - name: http
+      port: 8071
+      targetPort: 8071
+
+---
+# Source: sglang/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-mock
+  namespace: vllm-mock
+  labels:
+    app: vllm-mock-sglang
+spec:
+  type: ClusterIP
+  selector:
+    app: vllm-mock-sglang
+  ports:
+  - port: 30000
+    targetPort: 30000
+    name: http-inference
+
+---
+# Source: sglang/charts/cart/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-mock-cart
+  namespace: vllm-mock
+  labels:
+    helm.sh/chart: cart-0.1.2
+    app.kubernetes.io/name: cart
+    app.kubernetes.io/instance: vllm-mock
+    app.kubernetes.io/version: "v0.6.2-k8s"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cart
+      app.kubernetes.io/instance: vllm-mock
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cart
+        app.kubernetes.io/instance: vllm-mock
+    spec:
+      terminationGracePeriodSeconds: 3600   # 硬切刀:到点 SIGKILL 强砍在途流。cart 也要排空长流(SSE 转发),须按最长流式响应设,别吃 k8s 默认 30s(见 openresty chart)
+      serviceAccountName: vllm-mock-cart   # ha-gate 用它管 Lease
+      shareProcessNamespace: true
+      initContainers:
+        # 等 autoconfig 把真 workers(url: http://...)写进 config.yaml 再启 cart —— CART 拒绝空 workers 会崩溃循环。
+        # 停在 Init 而非 CrashLoop;workers 就绪(或 ~10min 超时兜底)后放行。用 cart 镜像自身(已在,免额外拉)。
+        - name: wait-workers
+          image: "harbor.4pd.io/hardcore-tech/cache_aware_router:v0.6.2-k8s"
+          command: ["sh", "-c", "for i in $(seq 1 300); do grep -qE 'url:[[:space:]]*http' /workspace/configs/config.yaml 2>/dev/null && { echo 'workers ready'; exit 0; }; echo \"[$i] 等 autoconfig 写 workers...\"; sleep 2; done; echo 'timeout, 仍放行'; exit 0"]
+          volumeMounts:
+            - name: cfg
+              mountPath: /workspace/configs
+      containers:
+        - name: cart
+          image: "harbor.4pd.io/hardcore-tech/cache_aware_router:v0.6.2-k8s"
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "ulimit -n 65535; exec ./launch_service"]
+          ports:
+            - containerPort: 8071
+          volumeMounts:
+            - name: cfg                 # autoconfig 写的 config.yaml(整卷挂到 /workspace/configs)
+              mountPath: /workspace/configs
+          startupProbe:                 # 慢启动预算:端口起来前不判 live/ready(最多 ~60s)
+            tcpSocket: { port: 8071 }
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:                # startup 过后才生效 → snappy 快抓假死
+            tcpSocket: { port: 8071 }
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:               # startup 过后端口已在 → 秒 Ready;谁收流量由 ha-active 标签定
+            tcpSocket: { port: 8071 }
+            periodSeconds: 2
+            failureThreshold: 2
+          resources:
+            limits:
+              cpu: "4"
+              memory: 4Gi
+            requests:
+              cpu: 200m
+              memory: 256Mi
+        - name: reload
+          image: harbor.4pd.io/hardcore-tech/autoconfig-reload:0.3.31
+          args: ["--watch", "/workspace/configs", "--process", "cache-aware-router"]
+          volumeMounts:
+            - name: cfg
+              mountPath: /workspace/configs
+        - name: hagate                  # master-standby:只有 leader 给自己打 cart-active 标签 → 只有它进 Service
+          image: harbor.4pd.io/hardcore-tech/autoconfig-hagate:0.3.31
+          args: ["--lease", "vllm-mock-cart-ha", "--http", ":8081", "--app-tcp", "127.0.0.1:8071", "--label-key", "cart-active"]
+          env:
+            - { name: POD_NAME,      valueFrom: { fieldRef: { fieldPath: metadata.name } } }
+            - { name: POD_NAMESPACE, valueFrom: { fieldRef: { fieldPath: metadata.namespace } } }
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 64Mi }
+      volumes:
+        - name: cfg
+          configMap:
+            name: vllm-mock-cart-config   # chart 建初值,autoconfig 更新
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/instance: vllm-mock
+                  app.kubernetes.io/name: cart
+              topologyKey: kubernetes.io/hostname
+            weight: 100
+
+---
+# Source: sglang/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-mock
+  namespace: vllm-mock
+  labels:
+    app: vllm-mock-sglang
+spec:
+  replicas: 1
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  # Checked against the startupProbe budget by the block at the top of this file.
+  progressDeadlineSeconds: 1800
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: vllm-mock-sglang
+  template:
+    metadata:
+      labels:
+        app: vllm-mock-sglang
+    spec:
+      
+      terminationGracePeriodSeconds: 60
+      containers:
+      - name: sglang
+        image: "harbor.4pd.io/hardcore-tech/startllm-mock-server:1.0"
+        env:
+          # false makes /health a plain status check. Left at SGLang's own
+          # default (true) it runs a real 1-token generation, sleeps at least 1s
+          # and can take 20s, which no sane probe timeout survives.
+          - name: SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION
+            value: "false"
+          - name: MODEL_NAME
+            value: mock-model
+        ports:
+        - containerPort: 30000
+          name: http
+        # While this is running the kubelet suppresses the other two probes, so a
+        # slow model load cannot trip a restart. Its
+        # failureThreshold x periodSeconds is the entire startup budget.
+        #
+        # Under LWS it covers more than a model load: the leader's port only binds
+        # once the whole group has finished the NCCL rendezvous, so this budget has
+        # to clear the slowest worker's start too.
+        startupProbe:
+          failureThreshold: 30
+          httpGet:
+            path: /v1/models
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /v1/models
+            port: http
+          periodSeconds: 5
+          timeoutSeconds: 3
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /v1/models
+            port: http
+          periodSeconds: 30
+          timeoutSeconds: 25
+
