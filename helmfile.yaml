@@ -92,7 +92,7 @@ releases:
       model: kimi-k25
       topology: lws
     values:
-      - charts/sglang/production/sglang-values-lws-multinode.yaml
+      - deploys/production/sglang-values-lws-multinode.yaml
 
   # -------------------------------------------------------------------------
   # Fallback modelforge -- Qwen3.6-35B-A3B on 2 GPUs, single-node Deployment,
@@ -116,7 +116,7 @@ releases:
       model: fallback-modelforge
       topology: deployment
     values:
-      - charts/sglang/production/sglang-values-fallback-modelforge.yaml
+      - deploys/production/sglang-values-fallback-modelforge.yaml
 
   # -------------------------------------------------------------------------
   # GLM-5 -- Qwen3.6-35B-A3B-793303-glm-5 on 2 GPUs, --tp 2, binpack-scheduler.
@@ -146,4 +146,4 @@ releases:
       model: modelforge-01-glm
       topology: deployment
     values:
-      - charts/sglang/production/sglang-modelforge-01-glm-5.yaml
+      - deploys/production/sglang-modelforge-01-glm-5.yaml
