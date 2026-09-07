@@ -101,6 +101,9 @@ model:
   # Leave empty to omit --context-length entirely and let SGLang use the model's
   # own. Only pin it when you really mean to cap the context.
   contextLength: "1024"
+  # Empty or "0" leaves nvidia.com/gpu off the pod entirely rather than
+  # requesting zero of it: the two schedule alike, but device plugins, GPU
+  # webhooks and quota all key off the key being there.
   gpus: "1"
 
 # Init container that checks the mounted model directory before the engine gets
@@ -122,7 +125,22 @@ modelCheck:
 # --tp-size=2, --mem-fraction-static=0.83). The chart already emits
 # --model-path, --served-model-name, --host, --port and --enable-metrics, so do
 # not repeat those here.
+#
+# Rejected under commandOverride below, which leaves no command line to append to.
 extraArgs: []
+
+# The container's command, replacing the SGLang line the chart builds. Unset
+# (default) leaves that alone; defined takes it over completely -- no
+# --model-path, no --enable-metrics, no LWS rank flags, and extraArgs is
+# rejected. `[]` means the image's own ENTRYPOINT.
+#
+# For running something that is not SGLang -- a mock server on service.port, to
+# exercise routing and scaling without GPUs or weights -- see values-mock.yaml,
+# which is a working example of this plus the settings that go with it.
+#
+# Use a values file for the `[]` form: `--set commandOverride={}` yields [""],
+# which no container can exec.
+commandOverride:
 
 service:
   type: ClusterIP

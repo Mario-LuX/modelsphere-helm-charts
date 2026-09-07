@@ -25,6 +25,8 @@
       to containers started as bash/sh -c. An exec-form container gets the
       hostPath mount and nothing else -- RDMA then silently falls back to the
       wrong HCA rather than failing.
+      Neither form is built under commandOverride, which also frees
+      model.localPath and model.gpus to be empty (see values.yaml).
     - --nnodes / --node-rank / --dist-init-addr, added only for lws roles.
     - probes, the hang-watcher sidecar and the container port: `serves` roles
       only. There is nothing listening on a worker to probe.
@@ -40,8 +42,20 @@
 {{- $worker := eq $role "worker" }}
 {{- $serves := not $worker }}
 {{- $preStop := $root.Values.lifecycle.preStop }}
+{{- /* Defined -- including as [] -- takes the container over, and nothing below
+       is built. [] renders no command at all: the image's ENTRYPOINT. */}}
+{{- $cmd := $root.Values.commandOverride }}
+{{- $override := not (kindIs "invalid" $cmd) }}
+{{- /* Empty means no model volume: no hostPath, no mount. */}}
+{{- $hasModel := ne (toString ($root.Values.model.localPath | default "")) "" }}
+{{- if and $override $root.Values.extraArgs }}
+{{- fail (printf "sglang: extraArgs is set (%v) but commandOverride replaces the command line the chart would append it to, so these flags would reach nothing. Fold them into commandOverride, or drop it" $root.Values.extraArgs) }}
+{{- end }}
+{{- if and (not $override) (not $hasModel) }}
+{{- fail "sglang: model.localPath is empty while the chart is still building SGLang's command line, and SGLang cannot start without --model-path. Set commandOverride to run a non-SGLang image, or point model.localPath at the weights" }}
+{{- end }}
 {{- /*
-  The engine command line, built once so both command forms say the same thing.
+  The engine command line, built once so both command forms say the same thing. Skipped entirely under commandOverride.
 
   extraArgs stays last so it can override anything above it -- SGLang's argparse
   takes the last occurrence of a repeated flag.
@@ -166,7 +180,14 @@ initContainers:
 containers:
 - name: sglang
   image: "{{ $root.Values.image.repository }}:{{ $root.Values.image.tag }}"
-  {{- if $multi }}
+  {{- if $override }}
+  {{- with $cmd }}
+  command:
+    {{- range . }}
+    - {{ toString . | quote }}
+    {{- end }}
+  {{- end }}
+  {{- else if $multi }}
   # Shell form on purpose -- see the header of this file. `exec` keeps SGLang as
   # PID 1, which SIGTERM handling and the leader preStop below both depend on.
   #
@@ -222,12 +243,16 @@ containers:
   securityContext:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- if or $hasModel $root.Values.volumeMounts }}
   volumeMounts:
+  {{- if $hasModel }}
   - name: model-storage
     mountPath: {{ $root.Values.model.mountPath }}
     readOnly: true
+  {{- end }}
   {{- with $root.Values.volumeMounts }}
   {{- toYaml . | nindent 2 }}
+  {{- end }}
   {{- end }}
   {{- /* The GPU limit stays derived from model.gpus -- the one place this
          chart names a GPU count -- and is merged over whatever else is in
@@ -237,16 +262,22 @@ containers:
          silently ignored.
 
          nvidia.com/gpu is an extended resource: it belongs in limits
-         only, and the kubelet sets the request equal to it. */}}
+         only, and the kubelet sets the request equal to it. Empty or 0
+         leaves the key out altogether rather than asking for zero of it. */}}
   {{- $res := $root.Values.resources | default dict }}
   {{- range $section := list "limits" "requests" }}
   {{- if hasKey (index $res $section | default dict) "nvidia.com/gpu" }}
   {{- fail (printf "sglang: set the GPU count with model.gpus, not resources.%s -- model.gpus is what renders nvidia.com/gpu and what the rest of the chart refers to" $section) }}
   {{- end }}
   {{- end }}
+  {{- $gpus := toString ($root.Values.model.gpus | default "") }}
+  {{- if not (or (eq $gpus "") (eq $gpus "0")) }}
+  {{- $res = mergeOverwrite (deepCopy $res) (dict "limits" (dict "nvidia.com/gpu" $gpus)) }}
+  {{- end }}
+  {{- with $res }}
   resources:
-    {{- $gpu := dict "limits" (dict "nvidia.com/gpu" (printf "%v" $root.Values.model.gpus)) }}
-    {{- toYaml (mergeOverwrite (deepCopy $res) $gpu) | nindent 4 }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- /* No preStop on a worker: it serves nothing, so there is nothing to drain,
          and it must stay in the NCCL group until the leader is done with it. */}}
   {{- if and $preStop.enabled $serves }}
@@ -332,18 +363,23 @@ containers:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 {{- end }}
+{{- $hangVol := and $root.Values.hangWatcher.enabled $serves }}
+{{- if or $hasModel $hangVol $root.Values.volumes }}
 volumes:
+{{- if $hasModel }}
 - name: model-storage
   hostPath:
     path: {{ $root.Values.model.localPath }}
     type: {{ $root.Values.model.hostPathType }}
-{{- if and $root.Values.hangWatcher.enabled $serves }}
+{{- end }}
+{{- if $hangVol }}
 - name: hang-watcher-config
   configMap:
     name: {{ $root.Release.Name }}-hang-watcher
 {{- end }}
 {{- with $root.Values.volumes }}
 {{- toYaml . | nindent 0 }}
+{{- end }}
 {{- end }}
 {{- with $root.Values.schedulerName }}
 schedulerName: {{ . }}

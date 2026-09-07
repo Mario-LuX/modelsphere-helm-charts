@@ -111,7 +111,10 @@
       "additionalProperties": false,
       "properties": {
         "name": { "type": "string", "minLength": 1 },
-        "localPath": { "type": "string", "minLength": 1 },
+        "localPath": {
+          "description": "Empty means no model volume at all (no hostPath, no mount), which needs commandOverride -- SGLang has no --model-path then.",
+          "type": "string"
+        },
         "mountPath": { "type": "string", "minLength": 1 },
         "hostPathType": { "type": "string" },
         "contextLength": {
@@ -119,7 +122,7 @@
           "type": ["string", "integer"]
         },
         "gpus": {
-          "description": "Quoted in values.yaml. PER POD, not per LWS group.",
+          "description": "Quoted in values.yaml. PER POD, not per LWS group. Empty or 0 omits nvidia.com/gpu from the pod entirely rather than requesting zero of it.",
           "type": ["string", "integer"]
         }
       }
@@ -135,8 +138,14 @@
     },
 
     "extraArgs": {
-      "description": "Appended verbatim to the engine command line. Entries are toString'd, so `- 8` and `- \"8\"` both work.",
+      "description": "Appended verbatim to the engine command line. Entries are toString'd, so `- 8` and `- \"8\"` both work. Rejected under commandOverride, which leaves no command line to append to.",
       "type": "array",
+      "items": { "type": ["string", "integer", "number", "boolean"] }
+    },
+
+    "commandOverride": {
+      "description": "Replaces the SGLang command line. null (the default) leaves it to the chart; defined -- including [] -- takes it over, and [] renders no command at all, i.e. the image's own ENTRYPOINT.",
+      "type": ["array", "null"],
       "items": { "type": ["string", "integer", "number", "boolean"] }
     },
 
