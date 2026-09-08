@@ -378,7 +378,7 @@ modelRoute:
     maxLoad: 50
   monitor:
     enabled: true
-    model: modelforge-01-glm
+    model: ""
     outputConfigMap: monitoring/monitor-conf
     # gpuType is deliberately left empty so autoconfig derives it from the node's
     # nvidia.com/gpu.product label. The affinity above admits both H100 and H800,

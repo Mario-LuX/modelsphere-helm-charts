@@ -726,8 +726,7 @@ spec:
     name: "fallback-modelforge-01"
   monitor:
     outputConfigMap: "monitoring/monitor-conf"
-    # Defaults to model.name, which is exactly what the chart passes to
-    # --served-model-name -- monitor matches on that string, so the two must agree.
+    # Defaults to serviceId
     model: "fallback-modelforge-0.1"
     gpuType: "H100"
 ---

@@ -743,8 +743,7 @@ spec:
     name: "modelforge-01-glm"
   monitor:
     outputConfigMap: "monitoring/monitor-conf"
-    # Defaults to model.name, which is exactly what the chart passes to
-    # --served-model-name -- monitor matches on that string, so the two must agree.
+    # Defaults to serviceId
     model: "modelforge-01-glm"
 ---
 # Source: sglang/templates/servicemonitor.yaml

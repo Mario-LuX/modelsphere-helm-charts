@@ -77,7 +77,7 @@ diff:
 	$(HELMFILE) $(SELECT) diff $(HELMFILE_FLAGS)
 
 apply:
-	$(HELMFILE) $(SELECT) apply $(HELMFILE_FLAGS)
+	$(HELMFILE) $(SELECT) apply --interactive $(HELMFILE_FLAGS)
 
 # One file per release, so a chart bump's blast radius across all three shows up
 # as an ordinary git diff instead of having to be simulated in your head.

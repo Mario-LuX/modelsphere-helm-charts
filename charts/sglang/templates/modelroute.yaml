@@ -176,9 +176,8 @@ spec:
   {{- if $mr.monitor.enabled }}
   monitor:
     outputConfigMap: {{ $mr.monitor.outputConfigMap | quote }}
-    # Defaults to model.name, which is exactly what the chart passes to
-    # --served-model-name -- monitor matches on that string, so the two must agree.
-    model: {{ $mr.monitor.model | default .Values.model.name | quote }}
+    # Defaults to serviceId
+    model: {{ $mr.monitor.model | default (include "sglang.serviceId" .) | quote }}
     {{- with $mr.monitor.gpuType }}
     gpuType: {{ . | quote }}
     {{- end }}
