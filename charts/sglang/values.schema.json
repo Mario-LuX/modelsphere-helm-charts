@@ -187,10 +187,21 @@
             "activeProbePath": { "type": "string" },
             "activeProbeMethod": { "type": "string" },
             "activeProbeBody": { "type": "string" },
-            "activeProbeTimeoutSec": { "type": "integer", "minimum": 1 }
+            "activeProbeTimeoutSec": { "type": "integer", "minimum": 1 },
+            "logHang": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "stallSec": { "type": "integer", "minimum": 1 },
+                "windowSec": { "type": "integer", "minimum": 1 },
+                "patterns": { "type": "array", "items": { "type": "string" } }
+              }
+            }
           }
         },
         "livenessProbe": { "$ref": "#/definitions/probe" },
+        "readinessProbe": { "$ref": "#/definitions/probe" },
         "resources": { "type": "object" }
       }
     },

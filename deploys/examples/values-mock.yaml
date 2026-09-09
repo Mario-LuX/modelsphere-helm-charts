@@ -51,6 +51,10 @@ readinessProbe:
   httpGet:
     path: /v1/models
     port: http
+  # 固定住,别跟着 chart 默认漂:那套 10s/5s 是给深端点 /health_generate 调的
+  # (每次探测要占 1 秒),而这里打的是秒回的 /v1/models。
+  periodSeconds: 5
+  timeoutSeconds: 3
 
 livenessProbe:
   httpGet:

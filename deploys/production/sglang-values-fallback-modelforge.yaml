@@ -126,13 +126,11 @@ startupProbe:
 
 readinessProbe:
   httpGet:
-    path: /health
+    path: /health_generate
     port: http
   periodSeconds: 10
   timeoutSeconds: 5
   failureThreshold: 3
-
-# Deep endpoint on purpose: /health only reports a status flag and would keep
 # answering 200 with a wedged scheduler. /health_generate proves the scheduler
 # still round-trips, and short-circuits on any scheduler activity so it costs
 # nothing while the server is busy.

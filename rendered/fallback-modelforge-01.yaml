@@ -93,6 +93,12 @@ data:
 # sidecar hot-reloads this on mtime change, so `helm upgrade` retunes it in place
 # without a pod restart. Keys are the sidecar's own (snake_case); values come
 # from hangWatcher.config in values.yaml.
+#
+# log_file is NOT here: it has to be built from the downward API (this pod's own
+# name/namespace), which a ConfigMap cannot do, so it goes in as an env var on the
+# sidecar instead. The two log_* keys below are only emitted when logHang is on --
+# the sidecar ignores them without a log file anyway, but leaving them out keeps
+# "is the fast path armed?" answerable by reading the ConfigMap alone.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -103,14 +109,16 @@ metadata:
 data:
   config.json: |
     {
-      "poll_interval_sec": 15,
-      "stall_sec": 180,
+      "poll_interval_sec": 5,
+      "stall_sec": 30,
       "metrics_timeout_sec": 10,
       "active_probe_enabled": true,
-      "active_probe_path": "/v1/completions",
-      "active_probe_method": "POST",
-      "active_probe_body": "{\"model\":\"kimi\",\"prompt\":\"ping\",\"max_tokens\":1,\"stream\":false}",
-      "active_probe_timeout_sec": 60
+      "active_probe_path": "/health_generate",
+      "active_probe_method": "GET",
+      "active_probe_body": "",
+      "active_probe_timeout_sec": 5,
+      "log_stall_sec": 15,
+      "log_window_sec": 120
     }
 
 ---
@@ -444,7 +452,7 @@ spec:
                 # all. Wanting the fallback without giving up the drain is a legitimate
                 # combination, so they stay separate switches.
                 - |
-                    import time, urllib.request, os, signal
+                    import time, urllib.request, urllib.error, os, signal
                     
                     METRICS = "http://127.0.0.1:8050/metrics"
                     # What SGLang is working on right now, plus what is queued up.
@@ -496,9 +504,36 @@ spec:
                     # server to drain -- it never bound its port, or it has already died -- and sitting out the rest
                     # of drainSeconds would only hold the GPUs while the replacement waits for them. A live server
                     # is covered either way, because SIGTERM starts SGLang's own drain once this hook returns.
+                    
+                    
+                    HEALTHZ = "http://127.0.0.1:9090/healthz"
+                    
+                    
+                    def hung():
+                        """True when the hang-watcher sidecar has already called this engine hung."""
+                        try:
+                            OPEN(HEALTHZ, timeout=2)
+                            return False
+                        except urllib.error.HTTPError as e:
+                            return e.code == 503
+                        except Exception:
+                            return False        # sidecar unreachable -- say nothing, fall through to the drain
+                    
+                    
                     deadline = time.monotonic() + 600
                     unreadable = 0
                     while time.monotonic() < deadline:
+                        # A hung engine's counters are frozen, not falling: they sit at whatever they were when it
+                        # wedged and never reach 0, so this loop would burn the full drainSeconds waiting for a
+                        # number that cannot move. Measured: the kubelet emitted Killing within 45s of the 503, and
+                        # the container still took ~4 more minutes to restart, stuck right here.
+                        #
+                        # This adds no new verdict of its own -- by the time preStop runs the container is already
+                        # being terminated, so the worst a wrong answer costs is one termination that did not wait
+                        # for a drain. That is not the same class of mistake as deciding to kill something.
+                        if hung():
+                            log("hang-watcher reports hung -- counters are frozen, nothing to drain")
+                            break
                         n = inflight()
                         if n == 0:
                             log("drained: nothing in flight")
@@ -551,7 +586,7 @@ spec:
         readinessProbe:
           failureThreshold: 3
           httpGet:
-            path: /health
+            path: /health_generate
             port: http
           periodSeconds: 10
           timeoutSeconds: 5
@@ -562,8 +597,8 @@ spec:
           httpGet:
             path: /healthz
             port: 9090
-          failureThreshold: 3
-          periodSeconds: 15
+          failureThreshold: 2
+          periodSeconds: 5
       # Hang-detection sidecar (see hangWatcher in values.yaml). Reads this pod's
       # own SGLang /metrics over localhost and serves /healthz for the engine's
       # livenessProbe above. Reports only; the kubelet does the restart. No RBAC.
@@ -572,7 +607,7 @@ spec:
       # to read -- and under RecreateGroupOnPodRestart a hung group is dealt with by
       # restarting the leader anyway, which takes the whole group with it.
       - name: hang-watcher
-        image: "harbor.4pd.io/hardcore-tech/hang-watcher:0.1.10"
+        image: "harbor.4pd.io/hardcore-tech/hang-watcher:0.1.18"
         env:
         - name: ENGINE_URL
           value: "http://127.0.0.1:8050"
@@ -580,12 +615,44 @@ spec:
           value: ":9090"
         - name: CONFIG_FILE
           value: /etc/hang-watcher/config.json
+        # Log fast path. Containers in a pod do NOT share a filesystem, so "same pod"
+        # is not enough to read the engine's output: its stdout goes to the NODE, at
+        # /var/log/pods/<ns>_<pod>_<uid>/<container>/N.log. Hence the read-only hostPath
+        # below plus these two downward-API vars -- without them the glob would also match
+        # the sglang container of every OTHER pod on the node, and a neighbour's stall
+        # would get this pod restarted. The uid and the rotation index stay globs.
+        #
+        # (The alternative -- an emptyDir shared with the engine -- would need SGLang to
+        # write to a file, which it has no flag for; wrapping the command in a `tee` pipe
+        # would displace PID 1 and break the SIGTERM drain this chart relies on.)
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NS
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: LOG_FILE
+          value: "/var/log/pods/$(POD_NS)_$(POD_NAME)_*/sglang/*.log"
         ports:
         - containerPort: 9090
           name: hang-hz
+        # Readiness on the sidecar itself: a hang verdict drops the POD out of the Service (an endpoint
+        # needs every container ready), so traffic stops arriving before the kill/drain even starts.
+        # The engine's own /v1/models readiness is untouched and still applies -- see values.yaml.
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 9090
+          failureThreshold: 2
+          periodSeconds: 5
         volumeMounts:
         - name: hang-watcher-config
           mountPath: /etc/hang-watcher
+          readOnly: true
+        - name: pod-logs
+          mountPath: /var/log/pods
           readOnly: true
         resources:
           limits:
@@ -602,6 +669,10 @@ spec:
       - name: hang-watcher-config
         configMap:
           name: fallback-modelforge-01-hang-watcher
+      - name: pod-logs
+        hostPath:
+          path: /var/log/pods
+          type: Directory
       - emptyDir:
           sizeLimit: 10Gi
         name: dot-cache

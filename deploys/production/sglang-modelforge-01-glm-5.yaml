@@ -225,13 +225,11 @@ startupProbe:
 
 readinessProbe:
   httpGet:
-    path: /v1/models
+    path: /health_generate
     port: http
   periodSeconds: 10
   timeoutSeconds: 5
   failureThreshold: 3
-
-# No livenessProbe here on purpose. hangWatcher is on by default and the chart
 # then points liveness at the sidecar's /healthz, ignoring .Values.livenessProbe
 # entirely -- writing one would be dead config that reads like a decision.
 #
@@ -241,17 +239,10 @@ readinessProbe:
 # reporting 503.
 hangWatcher:
   enabled: true
-  config:
-    # A long prefill at 262144 context can legitimately freeze token_progress for
-    # a while; stay well above the longest one you expect.
-    stallSec: 300
-
-# The chart's 1800s default is below this model's startup budget (15s x 80 =
-# 1200s) once image-pull time is added, and a rollout would then be marked
-# ProgressDeadlineExceeded while the new pod is still loading exactly as
-# intended. 2400 leaves the 20 minutes plus room for pulling a multi-GB engine
-# image onto a cold node. The chart refuses to render if this drops below the
-# probe budget.
+  # stallSec: 300 removed -- uses the chart's hangWatcher defaults. The 300 was there because
+  # "a long prefill can legitimately freeze token_progress", which the sidecar's per-iteration
+  # counters made obsolete. Restating the chart's numbers here only creates a second place to
+  # go stale.
 progressDeadlineSeconds: 2400
 
 # Rolling with maxSurge: 1 (the chart default) needs 2 spare GPUs for the

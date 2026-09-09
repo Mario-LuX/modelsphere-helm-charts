@@ -241,28 +241,22 @@ startupProbe:
   failureThreshold: 160
 readinessProbe:
   httpGet:
-    path: /v1/models
+    path: /health_generate
     port: http
   initialDelaySeconds: 60
-  periodSeconds: 15
+  periodSeconds: 10
   timeoutSeconds: 5
   failureThreshold: 3
-
-# Liveness is the hang-watcher sidecar's /healthz (chart default), which is what
 # makes a liveness probe safe on a model that takes ~10 minutes to load: the
 # sidecar distinguishes "still loading" from "token_progress has stalled", so
 # only a real hang restarts the leader -- and RecreateGroupOnPodRestart then
 # rebuilds the group around it.
 hangWatcher:
   enabled: true
-  config:
-    # A long prefill on K2.5 can legitimately freeze token_progress for a while;
-    # stay well above the longest one you expect.
-    stallSec: 300
-
-# Long generations, so allow a long drain. Note what this number is: SGLang's
-# post-SIGTERM drain has no timeout of its own, so this is the deadline that
-# CUTS IT OFF, not a budget it stays inside.
+  # stallSec: 300 removed -- uses the chart's hangWatcher defaults. The 300 was there because
+  # "a long prefill can legitimately freeze token_progress", which the sidecar's per-iteration
+  # counters made obsolete. Restating the chart's numbers here only creates a second place to
+  # go stale.
 terminationGracePeriodSeconds: 3600
 lifecycle:
   preStop:
