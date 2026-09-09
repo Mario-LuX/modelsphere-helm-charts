@@ -298,7 +298,7 @@ containers:
           # all. Wanting the fallback without giving up the drain is a legitimate
           # combination, so they stay separate switches.
           - |
-            {{- include "sglang.preStopScript" (dict "root" $root "kill" (ternary $lws.leaderPreStopKill $root.Values.lifecycle.preStopKill $multi)) | nindent 14 }}
+            {{- include "sglang.preStopScript" (dict "root" $root "serves" $serves "kill" (ternary $lws.leaderPreStopKill $root.Values.lifecycle.preStopKill $multi)) | nindent 14 }}
   {{- end }}
   {{- if $serves }}
   {{- with $root.Values.startupProbe }}
@@ -351,13 +351,57 @@ containers:
     value: ":{{ $root.Values.hangWatcher.port }}"
   - name: CONFIG_FILE
     value: /etc/hang-watcher/config.json
+  {{- if (($root.Values.hangWatcher.config).logHang | default dict).enabled }}
+  # Log fast path. Containers in a pod do NOT share a filesystem, so "same pod"
+  # is not enough to read the engine's output: its stdout goes to the NODE, at
+  # /var/log/pods/<ns>_<pod>_<uid>/<container>/N.log. Hence the read-only hostPath
+  # below plus these two downward-API vars -- without them the glob would also match
+  # the sglang container of every OTHER pod on the node, and a neighbour's stall
+  # would get this pod restarted. The uid and the rotation index stay globs.
+  #
+  # (The alternative -- an emptyDir shared with the engine -- would need SGLang to
+  # write to a file, which it has no flag for; wrapping the command in a `tee` pipe
+  # would displace PID 1 and break the SIGTERM drain this chart relies on.)
+  - name: POD_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.name
+  - name: POD_NS
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.namespace
+  - name: LOG_FILE
+    value: "/var/log/pods/$(POD_NS)_$(POD_NAME)_*/sglang/*.log"
+  {{- with (($root.Values.hangWatcher.config).logHang | default dict).patterns }}
+  {{- /* Join the list into one RE2 alternation. Each entry is wrapped in (?:...)
+         so an entry that itself contains `|` stays self-contained instead of
+         merging with the next one. Empty list -> env omitted -> sidecar default. */}}
+  - name: LOG_HANG_PATTERN
+    value: {{ (printf "(?:%s)" (join ")|(?:" .)) | quote }}
+  {{- end }}
+  {{- end }}
   ports:
   - containerPort: {{ $root.Values.hangWatcher.port }}
     name: hang-hz
+  {{- with $root.Values.hangWatcher.readinessProbe }}
+  # Readiness on the sidecar itself: a hang verdict drops the POD out of the Service (an endpoint
+  # needs every container ready), so traffic stops arriving before the kill/drain even starts.
+  # The engine's own /v1/models readiness is untouched and still applies -- see values.yaml.
+  readinessProbe:
+    httpGet:
+      path: /healthz
+      port: {{ $root.Values.hangWatcher.port }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   volumeMounts:
   - name: hang-watcher-config
     mountPath: /etc/hang-watcher
     readOnly: true
+  {{- if (($root.Values.hangWatcher.config).logHang | default dict).enabled }}
+  - name: pod-logs
+    mountPath: /var/log/pods
+    readOnly: true
+  {{- end }}
   {{- with $root.Values.hangWatcher.resources }}
   resources:
     {{- toYaml . | nindent 4 }}
@@ -376,6 +420,12 @@ volumes:
 - name: hang-watcher-config
   configMap:
     name: {{ $root.Release.Name }}-hang-watcher
+{{- if (($root.Values.hangWatcher.config).logHang | default dict).enabled }}
+- name: pod-logs
+  hostPath:
+    path: /var/log/pods
+    type: Directory
+{{- end }}
 {{- end }}
 {{- with $root.Values.volumes }}
 {{- toYaml . | nindent 0 }}
@@ -446,7 +496,7 @@ tolerations:
 {{- /* ~30s of consecutive unreadable metrics, whatever the poll interval. */ -}}
 {{- $streak := max 3 (div 30 $poll) -}}
 {{- $streakSecs := mul $streak $poll -}}
-import time, urllib.request{{ if .kill }}, os, signal{{ end }}
+import time, urllib.request, urllib.error{{ if .kill }}, os, signal{{ end }}
 
 METRICS = "http://127.0.0.1:{{ $root.Values.service.port }}/metrics"
 # What SGLang is working on right now, plus what is queued up.
@@ -498,9 +548,45 @@ time.sleep({{ $preStop.endpointSyncSeconds }})
 # server to drain -- it never bound its port, or it has already died -- and sitting out the rest
 # of drainSeconds would only hold the GPUs while the replacement waits for them. A live server
 # is covered either way, because SIGTERM starts SGLang's own drain once this hook returns.
+{{- /* The sidecar only exists on pods that serve (see the hang-watcher container below), so
+       asking it anything is only meaningful there. preStop itself is already gated on $serves
+       today, which would make this guard redundant -- state it anyway rather than rely on a
+       caller two hundred lines away staying that way. */}}
+{{- $askWatcher := and $root.Values.hangWatcher.enabled .serves }}
+{{- if $askWatcher }}
+
+
+HEALTHZ = "http://127.0.0.1:{{ $root.Values.hangWatcher.port }}/healthz"
+
+
+def hung():
+    """True when the hang-watcher sidecar has already called this engine hung."""
+    try:
+        OPEN(HEALTHZ, timeout=2)
+        return False
+    except urllib.error.HTTPError as e:
+        return e.code == 503
+    except Exception:
+        return False        # sidecar unreachable -- say nothing, fall through to the drain
+{{- end }}
+
+
 deadline = time.monotonic() + {{ $preStop.drainSeconds }}
 unreadable = 0
 while time.monotonic() < deadline:
+    {{- if $askWatcher }}
+    # A hung engine's counters are frozen, not falling: they sit at whatever they were when it
+    # wedged and never reach 0, so this loop would burn the full drainSeconds waiting for a
+    # number that cannot move. Measured: the kubelet emitted Killing within 45s of the 503, and
+    # the container still took ~4 more minutes to restart, stuck right here.
+    #
+    # This adds no new verdict of its own -- by the time preStop runs the container is already
+    # being terminated, so the worst a wrong answer costs is one termination that did not wait
+    # for a drain. That is not the same class of mistake as deciding to kill something.
+    if hung():
+        log("hang-watcher reports hung -- counters are frozen, nothing to drain")
+        break
+    {{- end }}
     n = inflight()
     if n == 0:
         log("drained: nothing in flight")

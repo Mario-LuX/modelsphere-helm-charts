@@ -149,19 +149,19 @@ service:
   # changing it here is enough. SGLang's own default is 30000.
   port: 30000
 
-# Makes /health a plain status check (200 / 503-while-starting /
-# 503-while-draining) instead of a real inference request.
+# Makes /health a cheap status check instead of a real inference request.
 #
-# SGLang ships SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION=true, which routes
-# /health through the SAME generate-a-token path as /health_generate. That
-# handler sleeps 1s before its first check and waits up to
-# SGLANG_HEALTH_CHECK_TIMEOUT (20s), so /health can never answer in under a
-# second -- against a probe timeoutSeconds that defaults to 1, it fails forever
-# with "context deadline exceeded".
+# SGLang ships this true, which routes /health through the same generate-a-token
+# handler as /health_generate: it sleeps 1s before its first check and waits up to
+# SGLANG_HEALTH_CHECK_TIMEOUT (20s), so it can never answer in under a second --
+# against a probe timeoutSeconds that defaults to 1, that fails forever. Measured
+# on one pod: /health 3ms with this false, /health_generate 1.00s.
 #
-# Set explicitly rather than relying on the image default, which has changed
-# between versions. /health_generate is unaffected and stays the deep check used
-# by livenessProbe below.
+# This only shapes /health. /health_generate always runs the deep check regardless, and
+# readinessProbe below points at it -- which is what keeps the deep handler exercised every
+# periodSeconds, both to notice a wedged detokenizer and to give logHang something to match.
+# Flipping this to true would drag every other /health caller (CART polls it every ~5s) from
+# 3ms to 1s+ for no added coverage.
 healthEndpointGeneration: false
 
 # Probes. `port: http` refers to the container port by name, so it follows
@@ -182,23 +182,29 @@ startupProbe:
   periodSeconds: 10
   timeoutSeconds: 5
   failureThreshold: 30
+# Readiness uses the DEEP endpoint: /v1/models and the shallow /health answer from cached
+# frontend state and never touch the scheduler, so they return 200 straight through a wedged
+# detokenizer (measured: 158s Ready and still taking traffic). /health_generate covers the
+# whole pipeline; switching cut traffic removal from "never" to 36s.
+# timeoutSeconds 5: measured 1.00s under 12 concurrent requests, near-zero variance (the
+# scheduler drops health checks while busy). The k8s default of 1s would fail forever.
+# startupProbe stays on /v1/models -- a more precise ready signal during load.
 readinessProbe:
   httpGet:
-    path: /health
+    path: /health_generate
     port: http
-  periodSeconds: 5
-  timeoutSeconds: 3
+  periodSeconds: 10
+  timeoutSeconds: 5
   failureThreshold: 3
-# Liveness uses the DEEP endpoint on purpose. /health only reports a status flag
-# and never touches the scheduler, so a wedged scheduler subprocess (CUDA hang,
-# NCCL deadlock -- the failure that actually needs a restart) would still answer
-# 200 and this probe would never fire. /health_generate submits a 1-token request
-# and returns as soon as ANY scheduler response is seen, so it stays cheap under
-# load and only really generates when the server is idle.
+# ⚠️ ONLY used when hangWatcher.enabled is false. With the sidecar on (the default)
+# the chart writes its own livenessProbe pointing at /healthz and ignores this block
+# entirely -- path, port and the numbers below included, so the "90s" is not what
+# actually runs (hangWatcher.livenessProbe governs that).
 #
-# timeoutSeconds MUST stay above SGLang's own HEALTH_CHECK_TIMEOUT (20s, env
-# SGLANG_HEALTH_CHECK_TIMEOUT). Below that the kubelet hangs up before SGLang
-# answers and counts a failure the server never had a chance to avoid.
+# The deep endpoint is deliberate: /health never touches the scheduler, so a wedged
+# scheduler would still answer 200. /health_generate returns as soon as ANY scheduler
+# response is seen, so it stays cheap under load. timeoutSeconds must stay above
+# SGLang's own HEALTH_CHECK_TIMEOUT (20s) or the kubelet hangs up first.
 livenessProbe:
   httpGet:
     path: /health_generate
@@ -217,25 +223,78 @@ hangWatcher:
   enabled: true              # default on; false = fall back to the engine's own livenessProbe, drop the sidecar (e.g. image unreachable)
   image:
     repository: "harbor.4pd.io/hardcore-tech/hang-watcher"
-    tag: "0.1.10"
+    tag: "0.1.18"
   port: 9090                 # /healthz port (just needs to differ from service.port)
   # Thresholds -> ConfigMap the sidecar hot-reloads (helm upgrade retunes, no pod restart).
   config:
-    pollIntervalSec: 15
-    stallSec: 180            # how long token_progress may freeze before a hang; keep above the longest legit stall (big prefill). Mirrors monitor GRACE.
+    # Adds 0~pollIntervalSec of jitter to detection (stallSec expires, then we wait for the
+    # next poll). 15 -> 5 narrowed the measured window from 50-65s to 35-40s; a loopback
+    # /metrics scrape every 5s costs nothing.
+    pollIntervalSec: 5
+    # How long token_progress may freeze before the sidecar starts asking questions.
+    # 180 -> 30, and ONLY safe together with sidecar 0.1.18: it counts per-iteration
+    # counters (realtime_tokens_total, cuda_graph_passes_total), whereas the older
+    # finish-only ones froze for a whole long request and got such a pod killed.
+    # With the active probe behind it this is "when to start asking", not "when to
+    # declare dead". Headroom: one chunked-prefill forward is 1-3s. Raise it if your
+    # deployment has stop-the-world operations (weight hot-reload).
+    stallSec: 30
     metricsTimeoutSec: 10
-    # Active confirmation: once token_progress has frozen past stallSec, probe the engine --
-    # 2xx = alive (no hang), timeout = confirmed hang. Default POST /v1/completions (real
-    # inference path, catches a wedged scheduler that still answers /health,/v1/models);
-    # empty body -> chart fills it from model.name.
+    # Once token_progress has frozen past stallSec, probe the engine: 2xx = alive,
+    # timeout/5xx = confirmed hang. On by default because the passive path cannot tell
+    # "genuinely idle" from "scheduler wedged" -- running is 0 in both.
+    #
+    # GET /health_generate, not POST /v1/completions: both reach the scheduler, but only
+    # this one is bounded (returns on ANY scheduler response, gives up at SGLang's own 20s
+    # with a 503). /v1/completions queues under load with no upper bound, which is why its
+    # timeout had to be 60s -- dead weight on every detection.
     activeProbeEnabled: true
-    activeProbePath: /v1/completions
-    activeProbeMethod: POST
+    activeProbePath: /health_generate
+    activeProbeMethod: GET
     activeProbeBody: ""
-    activeProbeTimeoutSec: 60
-  livenessProbe:             # merged onto the engine container (3 x 15s = 45s of 503 before restart)
-    periodSeconds: 15
-    failureThreshold: 3
+    # 5s, well under the engine's own 20s: we time out first, so the verdict is "no answer"
+    # rather than the engine's explicit 503 -- weaker, still bounded, and it was the largest
+    # fixed cost after stallSec. Safe because the probe only fires after 30s of frozen
+    # progress: a healthy busy engine never gets here, an idle one answers within the
+    # handler's 1s tick. Narrows tolerance for stop-the-world stalls from ~55s to ~35s.
+    activeProbeTimeoutSec: 5
+    # A second, independent signal: the engine complaining in its own log. Frozen for
+    # logHang.stallSec AND a matching line within windowSec -> hang, without waiting out the
+    # full stallSec. It ORs with the normal path, so it can only shorten a restart. It also
+    # covers wedged-idle, where running=0 hides a dead scheduler from the passive path.
+    # Passive -- no extra request: the sidecar tails this pod's sglang log via a read-only
+    # /var/log/pods mount (path from the downward API, so never a neighbour's). Rotation,
+    # truncation and partial lines handled; seeks to EOF on start; an unreadable log just
+    # skips the fast path.
+    # On by default ONLY because readinessProbe drives /health_generate -- that is what makes
+    # the engine emit the line early enough to matter. Measured: 35s vs 42s.
+    logHang:
+      enabled: true
+      # Frozen this long + a log hit = hang. MUST stay below the stallSec above -- firing
+      # earlier is the whole point, and the chart fails at render time otherwise (the schema
+      # only checks minimum: 1, so two equal values would look valid and silently do nothing).
+      stallSec: 15
+      windowSec: 120         # how recently the sidecar must have READ a matching line (wall clock at poll time, not the timestamp inside the line)
+      # Regexes (RE2) to look for. Empty = the sidecar's built-in SGLang detokenizer-timeout
+      # pattern; a non-empty list REPLACES it, so name it explicitly to keep it. The chart
+      # joins entries into one alternation, each wrapped in (?:...) so a `|` inside an entry
+      # cannot bleed into the next. Example: ["couldn't get a response from detokenizer", "Watchdog timeout"]
+      patterns: []
+  # Tunes the ENGINE container's livenessProbe (which points at this sidecar's /healthz), not
+  # a probe on the sidecar -- the sidecar has no liveness. 2 x 5s = 10s of 503 before restart.
+  # Was 15s x 3: that window alone cost more than the probe and stallSec combined, and probing
+  # a loopback endpoint every 5s costs nothing. failureThreshold 2 rather than 3 because a
+  # sidecar that really goes away is gone far longer than either window anyway.
+  livenessProbe:
+    periodSeconds: 5
+    failureThreshold: 2
+  # Readiness on the SIDECAR ITSELF: a pod is an endpoint only while every container is ready,
+  # so a hang verdict drops it out of the Service without touching the engine's own probes.
+  # More aggressive (2 x 5s) than liveness because a wrong readiness only moves traffic.
+  # Startup is unaffected (healthy until the first scrape). Set to {} to drop it.
+  readinessProbe:
+    periodSeconds: 5
+    failureThreshold: 2
   resources:
     requests: { cpu: "10m", memory: "16Mi" }
     limits:   { cpu: "100m", memory: "64Mi" }

@@ -3,12 +3,37 @@
 # sidecar hot-reloads this on mtime change, so `helm upgrade` retunes it in place
 # without a pod restart. Keys are the sidecar's own (snake_case); values come
 # from hangWatcher.config in values.yaml.
+#
+# log_file is NOT here: it has to be built from the downward API (this pod's own
+# name/namespace), which a ConfigMap cannot do, so it goes in as an env var on the
+# sidecar instead. The two log_* keys below are only emitted when logHang is on --
+# the sidecar ignores them without a log file anyway, but leaving them out keeps
+# "is the fast path armed?" answerable by reading the ConfigMap alone.
 {{- $c := .Values.hangWatcher.config }}
+{{- /* `helm upgrade --reuse-values` 复用的是上一版【用户提供】的 values,不会补上新 chart 才
+       新增的键。任何在自己 values 里写过 hangWatcher.config.* 的 release(生产三个都写了
+       stallSec)升级时,$c.logHang 就是 nil,直接 `nil pointer evaluating interface{}.enabled`
+       整个 upgrade 失败 —— 2026-09-08 在测试集群实测到。别指望调用方永远记得用
+       --reset-then-reuse-values,模板自己兜住。 */}}
+{{- $logHang := $c.logHang | default dict }}
+{{- /* logHang 存在的意义就是「有第二个信号时【更早】判」。它的 stallSec 若不小于外层的
+       stallSec,快判永远不可能先于普通路径触发 —— 配了等于没配,而且没有任何提示
+       (schema 只校验 minimum: 1,两个相等看着完全合法)。这种静默失效比报错难查得多,
+       所以在 render 期就拦掉。
+       2026-09-09 踩:外层 stallSec 从 60 降到 30 时,忘了跟着降 logHang.stallSec,
+       两个都是 30,快判彻底失效而无人察觉。 */}}
+{{- if $logHang.enabled }}
+{{- $ls := int ($logHang.stallSec | default 15) }}
+{{- $ss := int ($c.stallSec | default 30) }}
+{{- if ge $ls $ss }}
+{{- fail (printf "sglang: hangWatcher.config.logHang.stallSec (%d) must be below hangWatcher.config.stallSec (%d). Firing EARLIER is the whole point of the log fast path; at or past the main threshold it can never fire first, so enabling it would be a silent no-op. Lower it, or set logHang.enabled=false" $ls $ss) }}
+{{- end }}
+{{- end }}
 {{- /* Default the probe body to a 1-token /v1/completions for this model when it
        is left empty and the method is POST. GET probes (e.g. /health_generate)
        keep an empty body. */}}
 {{- $body := $c.activeProbeBody }}
-{{- if and (not $body) (eq (upper $c.activeProbeMethod) "POST") }}
+{{- if and (not $body) (eq (upper ($c.activeProbeMethod | default "GET")) "POST") }}
 {{- $body = printf `{"model":"%s","prompt":"ping","max_tokens":1,"stream":false}` .Values.model.name }}
 {{- end }}
 apiVersion: v1
@@ -21,13 +46,19 @@ metadata:
 data:
   config.json: |
     {
-      "poll_interval_sec": {{ $c.pollIntervalSec }},
-      "stall_sec": {{ $c.stallSec }},
-      "metrics_timeout_sec": {{ $c.metricsTimeoutSec }},
-      "active_probe_enabled": {{ $c.activeProbeEnabled }},
-      "active_probe_path": {{ $c.activeProbePath | quote }},
-      "active_probe_method": {{ $c.activeProbeMethod | quote }},
+      {{- /* 每个字段都带 default:同上,--reuse-values 时 $c 里可能只剩用户显式写过的那几个键,
+             缺的会渲染成空 -> `"poll_interval_sec": ,` 这种非法 JSON。sidecar 解析失败会静默
+             退回它自己的内置默认值(不 crash),于是这里配的 stall_sec 就悄悄失效了 ——
+             比报错更难发现,所以宁可在模板里把默认值写死一份。 */}}
+      "poll_interval_sec": {{ $c.pollIntervalSec | default 15 }},
+      "stall_sec": {{ $c.stallSec | default 60 }},
+      "metrics_timeout_sec": {{ $c.metricsTimeoutSec | default 10 }},
+      "active_probe_enabled": {{ $c.activeProbeEnabled | default false }},
+      "active_probe_path": {{ $c.activeProbePath | default "/health_generate" | quote }},
+      "active_probe_method": {{ $c.activeProbeMethod | default "GET" | quote }},
       "active_probe_body": {{ $body | toJson }},
-      "active_probe_timeout_sec": {{ $c.activeProbeTimeoutSec }}
+      "active_probe_timeout_sec": {{ $c.activeProbeTimeoutSec | default 25 }}{{ if $logHang.enabled }},
+      "log_stall_sec": {{ $logHang.stallSec | default 30 }},
+      "log_window_sec": {{ $logHang.windowSec | default 120 }}{{ end }}
     }
 {{- end }}
