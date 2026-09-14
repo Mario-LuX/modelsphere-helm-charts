@@ -99,7 +99,7 @@ extraArgs:
   # python) can lose to -- and the leader then EXITS, restarting the group into
   # the same race, with the startupProbe budget below never reaching its 20
   # minutes. Sized to cover the worst cold start instead. Confirm the unit for
-  # your build: python3 -m sglang.launch_server --help | grep dist-timeout
+  # your build: sglang serve --help | grep dist-timeout
   - "--dist-timeout=1800"
   - "--trust-remote-code"
   - "--enable-cache-report"

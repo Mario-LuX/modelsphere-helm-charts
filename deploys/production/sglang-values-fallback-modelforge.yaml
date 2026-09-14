@@ -308,8 +308,5 @@ serviceMonitor:
 #                    container runtime / kubelet (e.g. containerd's
 #                    default_ulimits), not per workload.
 #
-# Also note the entrypoint differs in form only: the script runs `sglang serve`,
-# the chart runs `python3 -m sglang.launch_server`. Both exist in v0.5.15 and
-# start the same server; the chart uses the module form because it is the
-# long-stable one.
+# The entrypoint matches: both the script and the chart run `sglang serve`.
 # ---------------------------------------------------------------------------

@@ -412,6 +412,6 @@ serviceMonitor:
 #   --runtime nvidia   Replaced by the device plugin: model.gpus renders
 #                      nvidia.com/gpu, and the runtime is the node's default.
 #
-# The entrypoint matches exactly -- the script runs
-# `python3 -m sglang.launch_server` and so does the chart.
+# The entrypoint matches exactly -- the script runs `sglang serve`
+# and so does the chart.
 # ---------------------------------------------------------------------------

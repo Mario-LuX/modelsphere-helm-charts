@@ -18,7 +18,7 @@
   What the role actually decides:
 
     - the engine command form. `single` keeps the exec form
-      (python3 -m sglang.launch_server, no shell). Multi-node pods need a shell,
+      (sglang serve, no shell). Multi-node pods need a shell,
       for two reasons that both matter: --node-rank has to come from
       ${LWS_WORKER_INDEX} at runtime, and the rdma-injector webhook only prepends
       its `source /etc/gpu-node/nccl-ib.env` (the per-node NCCL_IB_HCA pipeline)
@@ -203,10 +203,10 @@ containers:
   args:
     - |
       ulimit -l unlimited 2>/dev/null || true
-      exec python3 -m sglang.launch_server{{ range $flags }} \
+      exec sglang serve{{ range $flags }} \
         {{ if contains "$" . }}{{ . }}{{ else }}{{ squote . }}{{ end }}{{ end }}
   {{- else }}
-  command: ["python3", "-m", "sglang.launch_server"]
+  command: ["sglang", "serve"]
   args:
     {{- range $flags }}
     - {{ . | quote }}
