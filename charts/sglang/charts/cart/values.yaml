@@ -38,7 +38,13 @@ baseConfig: |
     host: "0.0.0.0"
     port: 8071
   cache:
-    threshold: 0.3
+    threshold: 0.1
+    balance_abs_threshold: 10
+    max_tree_size: 5000000
+    daily_cleanup_hour_utc: 21
+  proxy:
+    add_routed_peer_header: true
+    remote_media_url_policy: 400
   health:
     endpoint: "/health"
     interval_secs: 10
