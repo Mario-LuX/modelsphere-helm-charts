@@ -48,8 +48,6 @@ baseConfig: |
   health:
     endpoint: "/health"
     interval_secs: 10
-  proxy:
-    add_routed_peer_header: true   # 回 x-routed-peer 头 → openresty forwarded_to 得真实后端 → bodylog 按后端聚合 → monitor per-model TPM 生效(其余 proxy 字段 serde 默认,含 connect_timeout_secs=2)
   workers: []
 
 # launch_service 要求 ulimit -n ≥ 65535
