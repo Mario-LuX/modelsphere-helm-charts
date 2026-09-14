@@ -64,7 +64,7 @@ service:
 
 resources:
   requests: { cpu: 200m, memory: 256Mi }
-  limits: { cpu: "4", memory: 4Gi }
+  limits: { cpu: "4", memory: 16Gi }
 
 podAnnotations: {}
 nodeSelector: {}
