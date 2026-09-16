@@ -137,6 +137,9 @@ spec:
     # reason as discovery.port above.
     port: {{ .Values.cart.service.port }}
     outputConfigMap: {{ printf "%s/%s" .Release.Namespace (include "cart.configMapName" $sub) | quote }}
+    {{- with include "cart.autoconfigKey" $sub }}
+    outputKey: {{ . | quote }}
+    {{- end }}
     {{- with $mr.cart.maxLoad }}
     maxLoad: {{ . }}
     {{- end }}

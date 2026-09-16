@@ -6,10 +6,10 @@ metadata:
   name: vllm-mock-cart
   namespace: vllm-mock
   labels:
-    helm.sh/chart: cart-0.1.2
+    helm.sh/chart: cart-0.2.0
     app.kubernetes.io/name: cart
     app.kubernetes.io/instance: vllm-mock
-    app.kubernetes.io/version: "v0.6.2-k8s"
+    app.kubernetes.io/version: "v0.6.4"
     app.kubernetes.io/managed-by: Helm
 spec:
   minAvailable: 1
@@ -51,26 +51,27 @@ metadata:
   name: vllm-mock-cart
   namespace: vllm-mock
   labels:
-    helm.sh/chart: cart-0.1.2
+    helm.sh/chart: cart-0.2.0
     app.kubernetes.io/name: cart
     app.kubernetes.io/instance: vllm-mock
-    app.kubernetes.io/version: "v0.6.2-k8s"
+    app.kubernetes.io/version: "v0.6.4"
     app.kubernetes.io/managed-by: Helm
 
 ---
 # Source: sglang/charts/cart/templates/configmap.yaml
-# cart-config:chart 建初值(config.yaml,含 server 块 + 初始 workers),autoconfig 更新
-# (autoconfig 只重填 workers 段;Helm 3 三方合并:模板不变时 upgrade 不覆盖 autoconfig 写的 live 值)。
+# cart-config:chart 建底稿 config.yaml + 各 overlay key。
+# 标了 autoconfig 的 key 不在这里渲染 —— 模板不出这个 key,helm upgrade 的三方合并就没有它,
+# autoconfig 写进去的 workers 不会被 upgrade 盖掉。
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: vllm-mock-cart-config
   namespace: vllm-mock
   labels:
-    helm.sh/chart: cart-0.1.2
+    helm.sh/chart: cart-0.2.0
     app.kubernetes.io/name: cart
     app.kubernetes.io/instance: vllm-mock
-    app.kubernetes.io/version: "v0.6.2-k8s"
+    app.kubernetes.io/version: "v0.6.4"
     app.kubernetes.io/managed-by: Helm
 data:
   config.yaml: |
@@ -78,13 +79,16 @@ data:
       host: "0.0.0.0"
       port: 8071
     cache:
-      threshold: 0.3
+      threshold: 0.1
+      balance_abs_threshold: 10
+      max_tree_size: 5000000
+      daily_cleanup_hour_utc: 21
+    proxy:
+      add_routed_peer_header: true
+      remote_media_url_policy: 400
     health:
       endpoint: "/health"
       interval_secs: 10
-    proxy:
-      add_routed_peer_header: true   # 回 x-routed-peer 头 → openresty forwarded_to 得真实后端 → bodylog 按后端聚合 → monitor per-model TPM 生效(其余 proxy 字段 serde 默认,含 connect_timeout_secs=2)
-    workers: []
     
 
 ---
@@ -96,10 +100,10 @@ metadata:
   name: vllm-mock-cart-ha
   namespace: vllm-mock
   labels:
-    helm.sh/chart: cart-0.1.2
+    helm.sh/chart: cart-0.2.0
     app.kubernetes.io/name: cart
     app.kubernetes.io/instance: vllm-mock
-    app.kubernetes.io/version: "v0.6.2-k8s"
+    app.kubernetes.io/version: "v0.6.4"
     app.kubernetes.io/managed-by: Helm
 rules:
   - apiGroups: ["coordination.k8s.io"]
@@ -117,10 +121,10 @@ metadata:
   name: vllm-mock-cart-ha
   namespace: vllm-mock
   labels:
-    helm.sh/chart: cart-0.1.2
+    helm.sh/chart: cart-0.2.0
     app.kubernetes.io/name: cart
     app.kubernetes.io/instance: vllm-mock
-    app.kubernetes.io/version: "v0.6.2-k8s"
+    app.kubernetes.io/version: "v0.6.4"
     app.kubernetes.io/managed-by: Helm
 subjects:
   - kind: ServiceAccount
@@ -138,10 +142,10 @@ metadata:
   name: vllm-mock-cart
   namespace: vllm-mock
   labels:
-    helm.sh/chart: cart-0.1.2
+    helm.sh/chart: cart-0.2.0
     app.kubernetes.io/name: cart
     app.kubernetes.io/instance: vllm-mock
-    app.kubernetes.io/version: "v0.6.2-k8s"
+    app.kubernetes.io/version: "v0.6.4"
     app.kubernetes.io/managed-by: Helm
 spec:
   type: ClusterIP
@@ -180,10 +184,10 @@ metadata:
   name: vllm-mock-cart
   namespace: vllm-mock
   labels:
-    helm.sh/chart: cart-0.1.2
+    helm.sh/chart: cart-0.2.0
     app.kubernetes.io/name: cart
     app.kubernetes.io/instance: vllm-mock
-    app.kubernetes.io/version: "v0.6.2-k8s"
+    app.kubernetes.io/version: "v0.6.4"
     app.kubernetes.io/managed-by: Helm
 spec:
   replicas: 2
@@ -204,20 +208,26 @@ spec:
         # 等 autoconfig 把真 workers(url: http://...)写进 config.yaml 再启 cart —— CART 拒绝空 workers 会崩溃循环。
         # 停在 Init 而非 CrashLoop;workers 就绪(或 ~10min 超时兜底)后放行。用 cart 镜像自身(已在,免额外拉)。
         - name: wait-workers
-          image: "harbor.4pd.io/hardcore-tech/cache_aware_router:v0.6.2-k8s"
-          command: ["sh", "-c", "for i in $(seq 1 300); do grep -qE 'url:[[:space:]]*http' /workspace/configs/config.yaml 2>/dev/null && { echo 'workers ready'; exit 0; }; echo \"[$i] 等 autoconfig 写 workers...\"; sleep 2; done; echo 'timeout, 仍放行'; exit 0"]
+          image: "harbor.4pd.io/hardcore-tech/cache_aware_router:v0.6.4"
+          # 扫底稿 + 覆盖层全部文件(autoconfig 落点可能是其中任一个)。正则别收紧到 [[:space:]]*http:带引号的 url 会漏。
+          command: ["sh", "-c", "for i in $(seq 1 300); do grep -qE 'url:.*http' /workspace/configs/config.yaml /workspace/configs/workers.yaml 2>/dev/null && { echo 'workers ready'; exit 0; }; echo \"[$i] 等 autoconfig 写 workers...\"; sleep 2; done; echo 'timeout, 仍放行'; exit 0"]
           volumeMounts:
             - name: cfg
               mountPath: /workspace/configs
       containers:
         - name: cart
-          image: "harbor.4pd.io/hardcore-tech/cache_aware_router:v0.6.2-k8s"
+          image: "harbor.4pd.io/hardcore-tech/cache_aware_router:v0.6.4"
           imagePullPolicy: IfNotPresent
-          command: ["sh", "-c", "ulimit -n 65535; exec ./launch_service"]
+          command: ["sh", "-c", "ulimit -n 65535; exec ./launch_service \"$@\"", "--"]   # "$@" 透传下面的 args
+          args:                         # 加载顺序 = 覆盖顺序,后者覆盖前者
+            - "-c"
+            - "/workspace/configs/config.yaml"
+            - "-c"
+            - "/workspace/configs/workers.yaml"
           ports:
             - containerPort: 8071
           volumeMounts:
-            - name: cfg                 # autoconfig 写的 config.yaml(整卷挂到 /workspace/configs)
+            - name: cfg               # 底稿 + 各 overlay key,整卷挂到 /workspace/configs
               mountPath: /workspace/configs
           startupProbe:                 # 慢启动预算:端口起来前不判 live/ready(最多 ~60s)
             tcpSocket: { port: 8071 }
@@ -234,7 +244,7 @@ spec:
           resources:
             limits:
               cpu: "4"
-              memory: 4Gi
+              memory: 16Gi
             requests:
               cpu: 200m
               memory: 256Mi
@@ -256,7 +266,7 @@ spec:
       volumes:
         - name: cfg
           configMap:
-            name: vllm-mock-cart-config   # chart 建初值,autoconfig 更新
+            name: vllm-mock-cart-config   # chart 建底稿 + overlay key,autoconfig 填它那个 key
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:

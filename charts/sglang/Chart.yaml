@@ -2,7 +2,7 @@ apiVersion: v2
 name: sglang
 description: A Helm chart for deploying SGLang model
 type: application
-version: 0.6.0
+version: 0.7.0
 appVersion: "1.0.0"
 
 # CART is vendored under charts/cart -- already present, so no `helm dependency
@@ -13,7 +13,10 @@ appVersion: "1.0.0"
 # CART belongs to exactly one model (prefix affinity only means anything within
 # a single model), which is why it ships inside the chart that owns the model
 # rather than being installed alongside it.
+#
+# charts/cart is GENERATED from the pin below by ./hack/vendor-cart.sh -- bump
+# the version and re-run it; never edit charts/cart by hand.
 dependencies:
   - name: cart
-    version: 0.1.3
+    version: 0.2.0
     condition: cart.enabled

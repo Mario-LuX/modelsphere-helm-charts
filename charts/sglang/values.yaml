@@ -515,14 +515,21 @@ serviceMonitor:
 # modelRoute.enabled off -- not a CART deployed alongside a route that ignores it.
 cart:
   enabled: false
+  # One ConfigMap, two keys: config.yaml is the chart's base (baseConfig below) and
+  # workers.yaml is autoconfig's, written off the ModelRoute. The chart's template
+  # never emits that key, so helm upgrade has nothing to patch there and the two stop
+  # contending over one document. modelRoute.cart.outputKey follows this.
+  configOverlays:
+    - key: workers.yaml
+      autoconfig: true
   # image:
   #   repository: harbor.4pd.io/hardcore-tech/cache_aware_router
   #   tag: ""            # defaults to the subchart's appVersion
   # CART's listen port, which the ModelRoute's cart.port follows.
   # service:
   #   port: 8071
-  # Per-model tuning of the config.yaml base that autoconfig refills the workers
-  # section of. Replaces the whole document, so copy the subchart's default first.
+  # Per-model tuning of the static config.yaml base (workers land in the override
+  # overlay above). Replaces the whole document, so copy the subchart's default first.
   # baseConfig: |
   #   ...
   # resources:
