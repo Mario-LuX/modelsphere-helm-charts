@@ -445,6 +445,19 @@
     "securityContext": { "type": "object" },
     "podLabels": { "type": "object" },
     "nodeSelector": { "type": "object" },
-    "affinity": { "type": "object" }
+    "affinity": { "type": "object" },
+
+    "cache": {
+      "description": "Host-level compile cache management (PyTorch Inductor, Triton, HuggingFace). Provides template-hash isolation, per-node slot leasing via kernel flock, warm reuse, and automatic garbage collection.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "hostPath": { "type": "string" },
+        "hostPathSuffix": { "type": "string" },
+        "historyLimit": { "type": "integer", "minimum": 1 },
+        "maxSlotsPerNode": { "type": "integer", "minimum": 1, "maximum": 64 }
+      }
+    }
   }
 }

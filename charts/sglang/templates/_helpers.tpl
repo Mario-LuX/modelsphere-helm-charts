@@ -70,3 +70,23 @@
 {{- fail (printf "sglang: terminationGracePeriodSeconds (%d) is smaller than the shutdown budget (%d = preStop endpointSyncSeconds %d + drainSeconds %d + lifecycle.shutdownReserveSeconds %d); the pod would be SIGKILLed mid-drain" (int .Values.terminationGracePeriodSeconds) (int $budget) (int $preStop.endpointSyncSeconds) (int $preStop.drainSeconds) (int .Values.lifecycle.shutdownReserveSeconds)) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+  Template hash for cache isolation. Evaluates all inputs that define compiled kernel compatibility:
+  image repo & tag, model name, context length, extraArgs, and compiler-relevant environment variables.
+*/}}
+{{- define "sglang.cacheTemplateHash" -}}
+{{- $envList := list -}}
+{{- range .Values.env -}}
+  {{- $envList = append $envList (printf "%s=%s" .name (.value | default "")) -}}
+{{- end -}}
+{{- $inputs := list
+      .Values.image.repository
+      .Values.image.tag
+      .Values.model.name
+      .Values.model.contextLength
+      .Values.extraArgs
+      $envList
+    | toJson -}}
+{{- sha256sum $inputs | trunc 10 -}}
+{{- end -}}

@@ -14,25 +14,6 @@
   so leader and worker cannot drift apart -- a mismatched --tp or a model volume
   present on one side only does not fail at render time, it fails minutes later
   as a NCCL timeout that reads like a network fault.
-
-  What the role actually decides:
-
-    - the engine command form. `single` keeps the exec form
-      (sglang serve, no shell). Multi-node pods need a shell,
-      for two reasons that both matter: --node-rank has to come from
-      ${LWS_WORKER_INDEX} at runtime, and the rdma-injector webhook only prepends
-      its `source /etc/gpu-node/nccl-ib.env` (the per-node NCCL_IB_HCA pipeline)
-      to containers started as bash/sh -c. An exec-form container gets the
-      hostPath mount and nothing else -- RDMA then silently falls back to the
-      wrong HCA rather than failing.
-      Neither form is built under commandOverride, which also frees
-      model.localPath and model.gpus to be empty (see values.yaml).
-    - --nnodes / --node-rank / --dist-init-addr, added only for lws roles.
-    - probes, the hang-watcher sidecar and the container port: `serves` roles
-      only. There is nothing listening on a worker to probe.
-    - preStop: see sglang.preStopScript.
-
-  Call it as:  include "sglang.podSpec" (dict "root" $ "role" "leader")
 */}}
 {{- define "sglang.podSpec" -}}
 {{- $root := .root }}
@@ -42,10 +23,15 @@
 {{- $worker := eq $role "worker" }}
 {{- $serves := not $worker }}
 {{- $preStop := $root.Values.lifecycle.preStop }}
+{{- $cache := $root.Values.cache | default dict }}
 {{- /* Defined -- including as [] -- takes the container over, and nothing below
        is built. [] renders no command at all: the image's ENTRYPOINT. */}}
 {{- $cmd := $root.Values.commandOverride }}
 {{- $override := not (kindIs "invalid" $cmd) }}
+{{- $cacheEnabled := and ($cache.enabled | default false) (not $override) }}
+{{- $cacheSuffix := ternary $cache.hostPathSuffix (include "sglang.fullname" $root) (not (kindIs "invalid" $cache.hostPathSuffix)) }}
+{{- $cacheBaseHostPath := $cache.hostPath | default "/mnt/disk0/sglang-cache" | trimSuffix "/" }}
+{{- $cacheFullHostPath := ternary (printf "%s/%s" $cacheBaseHostPath $cacheSuffix) $cacheBaseHostPath (ne (toString $cacheSuffix) "") }}
 {{- /* Empty means no model volume: no hostPath, no mount. */}}
 {{- $hasModel := ne (toString ($root.Values.model.localPath | default "")) "" }}
 {{- if and $override $root.Values.extraArgs }}
@@ -53,6 +39,14 @@
 {{- end }}
 {{- if and (not $override) (not $hasModel) }}
 {{- fail "sglang: model.localPath is empty while the chart is still building SGLang's command line, and SGLang cannot start without --model-path. Set commandOverride to run a non-SGLang image, or point model.localPath at the weights" }}
+{{- end }}
+{{- if $cacheEnabled }}
+{{- range $vm := $root.Values.volumeMounts }}
+{{- $mp := clean (toString $vm.mountPath) }}
+{{- if or (eq $mp "/root/.cache") (hasPrefix "/root/.cache/" $mp) }}
+{{- fail (printf "sglang: cache.enabled is true, but volumeMounts carries an extra mount to %s (volume %q). The managed cache automatically provisions and symlinks /root/.cache to isolated host slots; remove the manual volumeMount from values to prevent mount collisions" $vm.mountPath ($vm.name | default "unnamed")) }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- /*
   The engine command line, built once so both command forms say the same thing. Skipped entirely under commandOverride.
@@ -187,30 +181,32 @@ containers:
     - {{ toString . | quote }}
     {{- end }}
   {{- end }}
-  {{- else if $multi }}
-  # Shell form on purpose -- see the header of this file. `exec` keeps SGLang as
-  # PID 1, which SIGTERM handling and the leader preStop below both depend on.
+  {{- else }}
+  # Unified startup architecture for all roles (single, leader, worker):
+  # Shell form with `exec` keeps SGLang as PID 1, which SIGTERM handling and
+  # preStop depend on.
   #
-  # ulimit -l lifts the locked-memory cap so the RDMA driver can pin its
-  # buffers; without it NCCL falls back to a slower path or fails outright on an
-  # IB fabric. Guarded, because a container without CAP_IPC_LOCK cannot raise it
-  # and that is not a reason to refuse to start.
+  # ulimit -l lifts the locked-memory cap so CUDA/NCCL/RDMA drivers can pin buffers;
+  # guarded with `2>/dev/null || true` because containers without CAP_IPC_LOCK
+  # cannot raise it and should continue starting.
+  #
+  # Containers started under bash -lc also allow mutating webhooks (e.g. rdma-injector)
+  # to prepend per-node environment setups (e.g. source /etc/gpu-node/nccl-ib.env).
   #
   # Flags carrying a ${...} are left unquoted so the shell expands them; the rest
-  # are single-quoted, so a value with a space in it (a JSON --*-override-args,
-  # say) survives the trip through bash.
+  # are single-quoted so complex arguments (JSON overrides) survive the trip through bash.
   command: ["bash", "-lc"]
   args:
     - |
       ulimit -l unlimited 2>/dev/null || true
-      exec sglang serve{{ range $flags }} \
+      {{- if $cacheEnabled }}
+      exec python3 /opt/sglang-cache/cache_manager.py -- \
+        sglang serve{{ range $flags }} \
+          {{ if contains "$" . }}{{ . }}{{ else }}{{ squote . }}{{ end }}{{ end }}
+      {{- else }}
+        exec sglang serve{{ range $flags }} \
         {{ if contains "$" . }}{{ . }}{{ else }}{{ squote . }}{{ end }}{{ end }}
-  {{- else }}
-  command: ["sglang", "serve"]
-  args:
-    {{- range $flags }}
-    - {{ . | quote }}
-    {{- end }}
+      {{- end }}
   {{- end }}
   env:
     # false makes /health a plain status check. Left at SGLang's own
@@ -231,6 +227,18 @@ containers:
     - name: SGL_FORCE_SHUTDOWN
       value: "1"
     {{- end }}
+    {{- if $cacheEnabled }}
+    - name: SGLANG_CACHE_HOST_DIR
+      value: "/var/cache/sglang-host"
+    - name: SGLANG_CACHE_MODEL_NAME
+      value: {{ $root.Values.model.name | quote }}
+    - name: SGLANG_CACHE_TEMPLATE_HASH
+      value: {{ include "sglang.cacheTemplateHash" $root | quote }}
+    - name: SGLANG_CACHE_MAX_SLOTS
+      value: {{ $cache.maxSlotsPerNode | default 8 | quote }}
+    - name: SGLANG_CACHE_HISTORY_LIMIT
+      value: {{ $cache.historyLimit | default 2 | quote }}
+    {{- end }}
     {{- with $root.Values.env }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -243,11 +251,18 @@ containers:
   securityContext:
     {{- toYaml . | nindent 4 }}
   {{- end }}
-  {{- if or $hasModel $root.Values.volumeMounts }}
+  {{- if or $hasModel $cacheEnabled $root.Values.volumeMounts }}
   volumeMounts:
   {{- if $hasModel }}
   - name: model-storage
     mountPath: {{ $root.Values.model.mountPath }}
+    readOnly: true
+  {{- end }}
+  {{- if $cacheEnabled }}
+  - name: host-cache
+    mountPath: /var/cache/sglang-host
+  - name: cache-manager-script
+    mountPath: /opt/sglang-cache
     readOnly: true
   {{- end }}
   {{- with $root.Values.volumeMounts }}
@@ -408,7 +423,7 @@ containers:
   {{- end }}
 {{- end }}
 {{- $hangVol := and $root.Values.hangWatcher.enabled $serves }}
-{{- if or $hasModel $hangVol $root.Values.volumes }}
+{{- if or $hasModel $hangVol $cacheEnabled $root.Values.volumes }}
 volumes:
 {{- if $hasModel }}
 - name: model-storage
@@ -426,6 +441,16 @@ volumes:
     path: /var/log/pods
     type: Directory
 {{- end }}
+{{- end }}
+{{- if $cacheEnabled }}
+- name: host-cache
+  hostPath:
+    path: {{ $cacheFullHostPath }}
+    type: DirectoryOrCreate
+- name: cache-manager-script
+  configMap:
+    name: {{ include "sglang.fullname" $root }}-cache-manager
+    defaultMode: 0755
 {{- end }}
 {{- with $root.Values.volumes }}
 {{- toYaml . | nindent 0 }}

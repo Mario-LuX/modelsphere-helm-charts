@@ -132,6 +132,9 @@ securityContext:
   capabilities:
     add: ["SYS_PTRACE", "SYS_NICE"]
 
+cache:
+  enabled: true
+
 volumes:
   # --mount type=bind,src=/root/deploy/modelforge-moe-config-merged,dst=/moe-config,readonly
   #
@@ -148,16 +151,6 @@ volumes:
     hostPath:
       path: /root/deploy/modelforge-moe-config-merged
       type: Directory
-  # --mount src=${deploy_root}/${service_name}/.cache,dst=/root/.cache
-  #
-  # emptyDir, not the script's hostPath. The script can use a host path safely
-  # because its cache dir is named after the one service; here the scaler is free
-  # to land two replicas on one node, and two processes writing one torch/CUDA
-  # compile cache corrupt it. The cost is a cold compile cache after every pod
-  # recreation, which a restart pays anyway.
-  - name: dot-cache
-    emptyDir:
-      sizeLimit: 10Gi
   # --ipc host, approximated. torch/NCCL need real shared memory and the default
   # 64MB /dev/shm is not enough. medium: Memory means tmpfs, charged to the
   # container's MEMORY rather than to ephemeral-storage.
@@ -170,8 +163,6 @@ volumeMounts:
   - name: moe-config
     mountPath: /moe-config
     readOnly: true
-  - name: dot-cache
-    mountPath: /root/.cache
   - name: dshm
     mountPath: /dev/shm
 
