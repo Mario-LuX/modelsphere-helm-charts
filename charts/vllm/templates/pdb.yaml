@@ -1,0 +1,108 @@
+{{- if .Values.podDisruptionBudget.enabled -}}
+{{- $pdb := .Values.podDisruptionBudget -}}
+{{/*
+  A disruption budget for the ENGINE pods. The CART subchart ships its own
+  (charts/cart/templates/pdb.yaml) and is not touched by this one -- two
+  workloads, two budgets.
+
+  What this does and does not cover is the part worth being precise about,
+  because the name suggests more than the object delivers:
+
+    covered      the eviction API -- `kubectl drain`, the cluster-autoscaler
+                 scaling a node down, a node being recycled by a platform
+                 operator. These ASK, and this is the answer.
+    best effort  scheduler preemption. A higher-priority pod may still take the
+                 node; the scheduler tries not to violate a PDB and gives up on
+                 that when it has no other choice.
+    not covered  anything that does not go through eviction: a node crashing or
+                 losing the kubelet, an OOM kill, a failing probe restarting a
+                 container, and the scaler scaling this fleet down. A PDB never
+                 keeps a replica alive -- it only makes a voluntary disruption
+                 wait.
+
+  It is also NOT the rollout guard. A `helm upgrade` replaces pods through the
+  Deployment's own strategy (maxSurge / maxUnavailable), which does not consult
+  this budget. If a rollout is taking down too much at once, that is the field to
+  change.
+*/}}
+{{- /*
+     Exactly one of the two, which is an API-server rule rather than a taste:
+     a PDB carrying both is rejected outright, and one carrying neither is
+     rejected too.
+*/ -}}
+{{- $hasMin := and (not (kindIs "invalid" $pdb.minAvailable)) (ne (printf "%v" $pdb.minAvailable) "") -}}
+{{- $hasMax := and (not (kindIs "invalid" $pdb.maxUnavailable)) (ne (printf "%v" $pdb.maxUnavailable) "") -}}
+{{- if and $hasMin $hasMax }}
+{{- fail (printf "vllm: podDisruptionBudget sets both minAvailable (%v) and maxUnavailable (%v), and the API server rejects a PDB carrying both. Empty the one you do not want -- maxUnavailable is the safer of the two under an autoscaler, see values.yaml" $pdb.minAvailable $pdb.maxUnavailable) }}
+{{- end }}
+{{- if not (or $hasMin $hasMax) }}
+{{- fail "vllm: podDisruptionBudget.enabled is on but neither minAvailable nor maxUnavailable is set -- a PDB must carry exactly one of them. maxUnavailable: 1 is the chart default and reads as \"never take down more than one at a time\" whatever the replica count" }}
+{{- end }}
+{{- /*
+     The smallest this fleet is ever allowed to get. Not a guess: it is the floor
+     the chart itself renders -- scaler.minReplicas when the operator owns the
+     count, replicaCount when it does not.
+*/ -}}
+{{- $floor := int (ternary .Values.scaler.minReplicas .Values.replicaCount .Values.scaler.enabled) -}}
+{{- $floorDesc := printf "%s %d" (ternary "scaler.minReplicas" "replicaCount" .Values.scaler.enabled) $floor -}}
+{{- if $hasMin }}
+{{- /* Resolve a percentage the way the disruption controller does -- against the
+       expected pod count, rounding UP -- so the check below sees the same number
+       Kubernetes will. Integer ceil: (a*b + 99) / 100. */ -}}
+{{- $raw := printf "%v" $pdb.minAvailable -}}
+{{- $resolved := 0 -}}
+{{- if hasSuffix "%" $raw -}}
+{{- $resolved = div (add (mul $floor (atoi (trimSuffix "%" $raw))) 99) 100 -}}
+{{- else -}}
+{{- $resolved = atoi $raw -}}
+{{- end -}}
+{{- if and (gt $floor 0) (ge $resolved $floor) }}
+{{- /*
+     The trap this exists to catch. disruptionsAllowed is (healthy - minAvailable),
+     so a minAvailable equal to the fleet's floor means zero allowed the moment
+     the fleet sits at that floor -- and `kubectl drain` does not time out, it
+     retries forever. Nothing resolves it either: the scaler adds replicas for
+     traffic, not because a drain is waiting, so the node stays cordoned and
+     half-drained until someone raises the number or deletes the PDB by hand.
+     minAvailable: 1 on a single-replica release is the version of this mistake
+     that everybody makes.
+*/ -}}
+{{- fail (printf "vllm: podDisruptionBudget.minAvailable (%v) resolves to %d pod(s) against a fleet floor of %d (%s), so no voluntary eviction is allowed at all once the fleet is at its floor -- a node drain would block indefinitely rather than wait, and nothing scales the fleet back up to unblock it. Use maxUnavailable: 1, which always permits exactly one disruption whatever the replica count -- or make the two agree: minAvailable strictly below the floor, or a floor (%s) above minAvailable" $pdb.minAvailable $resolved $floor $floorDesc (ternary "scaler.minReplicas" "replicaCount" .Values.scaler.enabled)) }}
+{{- end }}
+{{- end }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "vllm.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Release.Name }}-vllm
+  {{- with $pdb.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- /* Rendered bare for a count and quoted for a percentage: the field is an
+         IntOrString, and a quoted "2" reaches the API server as the string "2",
+         which it rejects for not being a percentage. */ -}}
+  {{- if $hasMin }}
+  {{- $raw := printf "%v" $pdb.minAvailable }}
+  minAvailable: {{ if hasSuffix "%" $raw }}{{ $raw | quote }}{{ else }}{{ atoi $raw }}{{ end }}
+  {{- else }}
+  {{- $raw := printf "%v" $pdb.maxUnavailable }}
+  maxUnavailable: {{ if hasSuffix "%" $raw }}{{ $raw | quote }}{{ else }}{{ atoi $raw }}{{ end }}
+  {{- end }}
+  {{- with $pdb.unhealthyPodEvictionPolicy }}
+  # AlwaysAllow lets a pod that has never been Ready be evicted even while the
+  # budget is unmet. Without it (the API default, IfHealthyBudget) a fleet that
+  # is already short one replica cannot be drained at all -- and on this chart
+  # "not Ready" is the normal state for the ~20 minutes a large model spends
+  # loading, so the window where that bites is not a corner case.
+  # Requires Kubernetes >= 1.27 (>= 1.26 behind a feature gate); an older API
+  # server drops the field rather than failing, leaving the default behaviour.
+  unhealthyPodEvictionPolicy: {{ . }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-vllm
+{{- end -}}

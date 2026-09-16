@@ -1,13 +1,17 @@
 cache-aware-router 已部署({{ include "cart.fullname" . }})。
 
 镜像: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
-配置 ConfigMap:{{ include "cart.configMapName" . }}(本 chart 建 config.yaml 初值,挂到 /workspace/configs)
+配置 ConfigMap:{{ include "cart.configMapName" . }}(挂到 /workspace/configs),加载顺序:
+  config.yaml(底稿,chart 建)
+{{- range .Values.configOverlays }}
+  {{ .key }}{{ if .autoconfig }}(autoconfig 写;ModelRoute.cart.outputKey 设成 {{ .key }}){{ else }}(chart 建){{ end }}
+{{- end }}
+  后者覆盖前者。workers 之外的改动不热更,要 kubectl rollout restart deploy/{{ include "cart.fullname" . }}
 {{- if .Values.reload.enabled }}
-reload: sidecar autoconfig-reload watch → SIGHUP cache-aware-router(热更 workers)
+reload: sidecar autoconfig-reload watch /workspace/configs → SIGHUP cache-aware-router(热更 workers)
 {{- end }}
 Service :{{ .Values.service.port }}(需与 ModelRoute.cart.port 一致)
 
-配置更新两种方式(不冲突):
-  - autoconfig(可选):有 ModelRoute(cart.outputConfigMap={{ include "cart.configMapName" . }})时自动写/更新 workers;
-  - 手动:kubectl edit cm {{ include "cart.configMapName" . }} 改 workers(standalone 模式在 values.baseConfig 写死)。
-  Helm upgrade 三方合并不会覆盖 autoconfig/手动写的 config.yaml。
+配置更新(不冲突):
+  - autoconfig:往 ModelRoute.cart.outputConfigMap/outputKey 指的 key 写 workers;
+  - 手动:kubectl edit cm {{ include "cart.configMapName" . }},或改 values 后 helm upgrade。

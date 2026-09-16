@@ -14,8 +14,9 @@
   chart that owns the Deployment -- the two cannot drift, and no one has to
   restate a name the chart already knows.
 
-  monitor.model is derived the same way, from model.name -- the value the chart
-  passes to --served-model-name, which is the string monitor matches on.
+  monitor.model is derived the same way, from the top-level serviceId -- the one
+  string this service is indexed under by the route, the SLO operator and the
+  decision server alike.
 
   The CRD carries CEL rules that reject a contradictory spec, but they name CR
   fields (spec.cart, nginx.peers) rather than the values keys below, and they
@@ -24,6 +25,13 @@
 */}}
 {{- $mr := .Values.modelRoute }}
 {{- $ownSvc := printf "%s/%s" .Release.Namespace (include "vllm.fullname" .) }}
+
+{{- /* The LLMSLORequirement whose thresholds replace the static ttft_limit_ms /
+       tps_limit_tps in nginx.values. Off leaves those in place. */}}
+{{- $sloName := "" }}
+{{- if $mr.slo.enabled }}
+{{- $sloName = $mr.slo.name | default (include "vllm.serviceId" .) }}
+{{- end }}
 
 {{- /* Is there a CART in this route? cart.enabled is the whole answer, and the
        only switch: it deploys the CART (the vendored subchart in charts/cart)
@@ -132,7 +140,7 @@ metadata:
   {{- end }}
   finalizers:
   - routing.gpucluster.io/cleanup
-spec:
+  spec:
   # The backend bucket: what feeds CART's workers, nginx's backend peers and
   # monitor's service rows. Always this release's own Service, so a scale event
   # is all it takes for every route to follow.
@@ -155,6 +163,12 @@ spec:
     # reason as discovery.port above.
     port: {{ .Values.cart.service.port }}
     outputConfigMap: {{ printf "%s/%s" .Release.Namespace (include "cart.configMapName" $sub) | quote }}
+    {{- with include "cart.autoconfigKey" $sub }}
+    # The key inside that ConfigMap autoconfig owns (cart.configOverlays). Kept
+    # apart from the chart's own config.yaml so `helm upgrade` has nothing to
+    # patch there and the two stop contending over one document.
+    outputKey: {{ . | quote }}
+    {{- end }}
     {{- with $mr.cart.maxLoad }}
     maxLoad: {{ . }}
     {{- end }}
@@ -187,12 +201,15 @@ spec:
     # already name one.
     peers:
       {{- toYaml $peers | nindent 6 }}
+  {{- with $sloName }}
+  slo:
+    name: {{ . | quote }}
+  {{- end }}
   {{- if $mr.monitor.enabled }}
   monitor:
     outputConfigMap: {{ $mr.monitor.outputConfigMap | quote }}
-    # Defaults to model.name, which is exactly what the chart passes to
-    # --served-model-name -- monitor matches on that string, so the two must agree.
-    model: {{ $mr.monitor.model | default .Values.model.name | quote }}
+    # Defaults to the top-level serviceId.
+    model: {{ $mr.monitor.model | default (include "vllm.serviceId" .) | quote }}
     {{- with $mr.monitor.gpuType }}
     gpuType: {{ . | quote }}
     {{- end }}

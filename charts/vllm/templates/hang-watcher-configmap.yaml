@@ -7,7 +7,7 @@
 {{- /* Default the probe body to a 1-token /v1/completions for this model when it
        is left empty and the method is POST. GET probes keep an empty body. */}}
 {{- $body := $c.activeProbeBody }}
-{{- if and (not $body) (eq (upper $c.activeProbeMethod) "POST") }}
+{{- if and (not $body) (eq (upper ($c.activeProbeMethod | default "POST")) "POST") }}
 {{- $body = printf `{"model":"%s","prompt":"ping","max_tokens":1,"stream":false}` .Values.model.name }}
 {{- end }}
 apiVersion: v1
@@ -20,13 +20,21 @@ metadata:
 data:
   config.json: |
     {
-      "poll_interval_sec": {{ $c.pollIntervalSec }},
-      "stall_sec": {{ $c.stallSec }},
-      "metrics_timeout_sec": {{ $c.metricsTimeoutSec }},
-      "active_probe_enabled": {{ $c.activeProbeEnabled }},
-      "active_probe_path": {{ $c.activeProbePath | quote }},
-      "active_probe_method": {{ $c.activeProbeMethod | quote }},
+      {{- /* Every field carries a default because `helm upgrade --reuse-values`
+             replays only the values the CALLER supplied last time, not the chart's
+             new ones -- so a release that set, say, hangWatcher.config.stallSec by
+             hand arrives here with the rest of the block missing. Undefaulted, those
+             render as `"poll_interval_sec": ,`, and the sidecar answers invalid JSON
+             by falling back to its OWN built-ins without crashing: the thresholds
+             configured here then silently stop applying. Harder to notice than a
+             failed render, hence the second copy of the defaults. */}}
+      "poll_interval_sec": {{ $c.pollIntervalSec | default 15 }},
+      "stall_sec": {{ $c.stallSec | default 180 }},
+      "metrics_timeout_sec": {{ $c.metricsTimeoutSec | default 10 }},
+      "active_probe_enabled": {{ $c.activeProbeEnabled | default false }},
+      "active_probe_path": {{ $c.activeProbePath | default "/v1/completions" | quote }},
+      "active_probe_method": {{ $c.activeProbeMethod | default "POST" | quote }},
       "active_probe_body": {{ $body | toJson }},
-      "active_probe_timeout_sec": {{ $c.activeProbeTimeoutSec }}
+      "active_probe_timeout_sec": {{ $c.activeProbeTimeoutSec | default 60 }}
     }
 {{- end }}

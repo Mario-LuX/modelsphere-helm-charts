@@ -1,0 +1,407 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "vllm chart values",
+  "description": "Helm silently ignores a values key it does not recognise, so a misspelling in a 300-line override file is not an error -- it is a setting that quietly does not apply. This schema exists to turn that class of failure into a failed render. The case it was written for: `failurThreshold` instead of `failureThreshold` under startupProbe. The chart passes probe blocks through with toYaml, the API server prunes the unknown field rather than rejecting it, the probe falls back to the Kubernetes default failureThreshold of 3, and a model with a 40-minute cold load gets killed after 45 seconds -- with no error anywhere. `additionalProperties: false` is therefore the point of this file, not decoration. Blocks the chart merely forwards to Kubernetes (resources, affinity, tolerations, env, volumes, securityContext) are deliberately left open: the API server owns those contracts, and restating them here would be a second source of truth that goes stale. The vendored cart subchart likewise owns its own values.",
+  "type": "object",
+  "additionalProperties": false,
+
+  "definitions": {
+    "httpGet": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string" },
+        "port": { "type": ["string", "integer"] },
+        "host": { "type": "string" },
+        "scheme": { "type": "string", "enum": ["HTTP", "HTTPS"] },
+        "httpHeaders": { "type": "array" }
+      }
+    },
+    "probe": {
+      "description": "A Kubernetes Probe, forwarded verbatim. Strict on purpose -- an unknown key here is the failure this whole file exists to catch.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "httpGet": { "$ref": "#/definitions/httpGet" },
+        "exec": { "type": "object" },
+        "tcpSocket": { "type": "object" },
+        "grpc": { "type": "object" },
+        "initialDelaySeconds": { "type": "integer", "minimum": 0 },
+        "periodSeconds": { "type": "integer", "minimum": 1 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 },
+        "successThreshold": { "type": "integer", "minimum": 1 },
+        "failureThreshold": { "type": "integer", "minimum": 1 },
+        "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "intOrPercent": {
+      "description": "An IntOrString: a bare count, a \"25%\" string, or \"\" to mean unset.",
+      "oneOf": [
+        { "type": "integer", "minimum": 0 },
+        { "type": "string", "pattern": "^([0-9]+%?)?$" }
+      ]
+    }
+  },
+
+  "properties": {
+    "global": {
+      "description": "Helm's reserved key for values shared with subcharts. Left open.",
+      "type": "object"
+    },
+
+    "fullnameOverride": { "type": "string" },
+    "serviceId": {
+      "description": "The id this service is known by outside the cluster's object graph -- the one string the decision server, the SLO operator and the route all index it under. Not a Kubernetes name, and never looked up from an object. Empty means vllm.fullname. Supplies the default for scaler.customProvider.serviceId, sloRequirement.serviceId, sloRequirement.name, modelRoute.slo.name and modelRoute.monitor.model, each of which can still be set on its own.",
+      "type": "string"
+    },
+    "replicaCount": { "type": "integer", "minimum": 0 },
+    "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0 },
+    "progressDeadlineSeconds": { "type": "integer", "minimum": 1 },
+    "revisionHistoryLimit": { "type": "integer", "minimum": 0 },
+    "schedulerName": { "type": "string" },
+    "priorityClassName": { "type": "string" },
+
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "localPath": {
+          "description": "Empty means no model volume at all (no hostPath, no mount), which needs commandOverride -- vLLM has no --model then.",
+          "type": "string"
+        },
+        "mountPath": { "type": "string", "minLength": 1 },
+        "hostPathType": { "type": "string" },
+        "maxLen": {
+          "description": "Quoted in values.yaml, and empty means \"let vLLM use the model's own\". An integer is accepted too.",
+          "type": ["string", "integer"]
+        },
+        "gpus": {
+          "description": "Quoted in values.yaml. Empty or 0 omits nvidia.com/gpu from the pod entirely rather than requesting zero of it.",
+          "type": ["string", "integer"]
+        }
+      }
+    },
+
+    "modelCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "requiredGlobs": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "extraArgs": {
+      "description": "Appended verbatim to the engine command line. Entries are toString'd, so `- 2` and `- \"2\"` both work. Rejected under commandOverride, which leaves no command line to append to.",
+      "type": "array",
+      "items": { "type": ["string", "integer", "number", "boolean"] }
+    },
+
+    "commandOverride": {
+      "description": "Replaces the vLLM command line. null (the default) leaves it to the chart; defined -- including [] -- takes it over, and [] renders no command at all, i.e. the image's own ENTRYPOINT.",
+      "type": ["array", "null"],
+      "items": { "type": ["string", "integer", "number", "boolean"] }
+    },
+
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+
+    "startupProbe": { "$ref": "#/definitions/probe" },
+    "readinessProbe": { "$ref": "#/definitions/probe" },
+    "livenessProbe": { "$ref": "#/definitions/probe" },
+
+    "hangWatcher": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" }
+          }
+        },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "pollIntervalSec": { "type": "integer", "minimum": 1 },
+            "stallSec": { "type": "integer", "minimum": 1 },
+            "metricsTimeoutSec": { "type": "integer", "minimum": 1 },
+            "activeProbeEnabled": { "type": "boolean" },
+            "activeProbePath": { "type": "string" },
+            "activeProbeMethod": { "type": "string" },
+            "activeProbeBody": { "type": "string" },
+            "activeProbeTimeoutSec": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "livenessProbe": { "$ref": "#/definitions/probe" },
+        "readinessProbe": { "$ref": "#/definitions/probe" },
+        "resources": { "type": "object" }
+      }
+    },
+
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "preStop": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "endpointSyncSeconds": { "type": "integer", "minimum": 0 },
+            "drainSeconds": { "type": "integer", "minimum": 0 },
+            "pollIntervalSeconds": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "shutdownTimeout": {
+          "description": "vLLM's own --shutdown-timeout. 0 leaves the flag off entirely (older images, or to keep vLLM's default of killing in-flight requests on SIGTERM).",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+
+    "scaler": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minReplicas": { "type": "integer", "minimum": 0 },
+        "maxReplicas": { "type": "integer", "minimum": 1 },
+        "syncPeriodSeconds": { "type": "integer", "minimum": 1 },
+        "metricProvider": { "type": "string", "enum": ["Prometheus", "Custom"] },
+        "serverAddress": { "type": "string" },
+        "serverHeaders": { "type": "object" },
+        "customProvider": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "serviceId": { "type": "string" },
+            "path": { "type": "string" },
+            "namespace": { "type": "string" }
+          }
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string" },
+              "query": { "type": "string" },
+              "target": { "type": ["string", "integer", "number"] }
+            }
+          }
+        },
+        "scaleDown": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "behavior": { "type": "string" },
+            "stabilizationWindowSeconds": { "type": "integer", "minimum": 0 },
+            "maxStepReplicas": { "type": "integer", "minimum": 0 },
+            "deletionCostQuery": { "type": "string" }
+          }
+        }
+      }
+    },
+
+    "sloRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "serviceId": {
+          "description": "spec.serviceId -- who the requirement is filed for. Empty means the top-level serviceId.",
+          "type": "string"
+        },
+        "name": {
+          "description": "metadata.name of the CR. Empty means the top-level serviceId, which is also what modelRoute.slo.name defaults to, so the route's reference resolves to this object.",
+          "type": "string"
+        },
+        "annotations": { "type": "object" },
+        "extraSpec": {
+          "description": "Free-form LLMSLORequirement spec fields, merged alongside serviceId. Open by design -- that schema belongs to the inference operator, not to this chart. serviceId is not among them: it comes from sloRequirement.serviceId, and a copy here is rejected at render time.",
+          "type": "object"
+        }
+      }
+    },
+
+    "metricsMock": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "type": "string" },
+        "value": { "type": ["string", "integer"] }
+      }
+    },
+
+    "serviceMonitor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "path": { "type": "string" },
+        "interval": { "type": "string" },
+        "scrapeTimeout": { "type": "string" },
+        "labels": { "type": "object" },
+        "podTargetLabels": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "cart": {
+      "description": "The vendored CART subchart owns its own values; only the condition key is asserted here. Add charts/vllm/charts/cart/values.schema.json if that side needs the same protection.",
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
+
+    "modelRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "name": { "type": "string" },
+        "annotations": { "type": "object" },
+        "slo": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "description": "Reference an LLMSLORequirement at all. Off omits spec.slo and keeps the static ttft_limit_ms / tps_limit_tps.",
+              "type": "boolean"
+            },
+            "name": {
+              "description": "metadata.name of the LLMSLORequirement whose thresholds replace the static ttft_limit_ms / tps_limit_tps. \"ns/name\" crosses namespaces. Empty means the top-level serviceId.",
+              "type": "string"
+            }
+          }
+        },
+        "discovery": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "includeNotReady": { "type": "boolean" }
+          }
+        },
+        "nginx": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "route": {
+              "description": "A URL path, so it takes the DOTTED spelling (fallback-modelforge-0.1), not the namespace spelling.",
+              "type": "string"
+            },
+            "outputConfigMap": { "type": "string" },
+            "service": { "type": "string" },
+            "selector": { "type": "string" },
+            "values": {
+              "description": "Free-form openresty route settings, keyed per route. Open by design -- the key set belongs to openresty's autoconfig, not to this chart. Values reach it as strings.",
+              "type": "object",
+              "additionalProperties": { "type": ["string", "integer", "number", "boolean"] }
+            },
+            "peers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "use": { "type": "string" },
+                  "priority": { "type": "integer" },
+                  "maxConcurrency": { "type": "integer", "minimum": 1 },
+                  "maxConcurrencyFromBackend": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "cart": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxLoad": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "monitor": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "outputConfigMap": { "type": "string" },
+            "model": {
+              "description": "Monitor's ConfigMap is keyed per MODEL, not per route -- two releases sharing this value clobber each other's row. Empty means the top-level serviceId.",
+              "type": "string"
+            },
+            "gpuType": { "type": "string" },
+            "nginx": { "type": ["object", "null"] },
+            "router": { "type": ["object", "null"] }
+          }
+        }
+      }
+    },
+
+    "podDisruptionBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "annotations": { "type": "object" },
+        "maxUnavailable": { "$ref": "#/definitions/intOrPercent" },
+        "minAvailable": { "$ref": "#/definitions/intOrPercent" },
+        "unhealthyPodEvictionPolicy": {
+          "type": "string",
+          "enum": ["", "AlwaysAllow", "IfHealthyBudget"]
+        }
+      }
+    },
+
+    "strategy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "enum": ["RollingUpdate", "Recreate"] },
+        "rollingUpdate": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxSurge": { "$ref": "#/definitions/intOrPercent" },
+            "maxUnavailable": { "$ref": "#/definitions/intOrPercent" }
+          }
+        }
+      }
+    },
+
+    "env": { "type": "array" },
+    "volumes": { "type": "array" },
+    "volumeMounts": { "type": "array" },
+    "tolerations": { "type": "array" },
+    "resources": { "type": "object" },
+    "securityContext": { "type": "object" },
+    "podLabels": { "type": "object" },
+    "nodeSelector": { "type": "object" },
+    "affinity": { "type": "object" }
+  }
+}

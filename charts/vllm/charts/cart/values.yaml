@@ -25,26 +25,42 @@ podDisruptionBudget:
   enabled: true
   minAvailable: 1
 
-# CART 配置 ConfigMap(config.yaml):chart 建**唯一底稿**(server/cache/health),autoconfig 只重填 workers 段。
+# CART 配置 ConfigMap(config.yaml):chart 建**底稿**(server/cache/health),autoconfig 只重填 workers 段。
 # 这就是 CART 的 base——per-model 的 port/cache 等直接改这里(每个模型一个 cart release)。不再有单独的 baseConfigRef。
 # ⚠️ cart 是【一个模型一个】,此 CM 也按模型独立。名字默认 = <fullname>-config(按 release 唯一,多 cart 同 ns 不撞);
-#    ModelRoute.cart.outputConfigMap 必须指到这个名。留空用默认,或显式覆盖。
+#    ModelRoute.cart.outputConfigMap 指到这个名,或指到某个覆盖层 CM(见 extraConfigs)。
 configMapName: ""
 
-# 底稿 config.yaml(server/cache/health + 占位 workers)。autoconfig 保留这部分、只替换 workers:;
+# 底稿 config.yaml(server/cache/health)。workers 由 autoconfig 写(落点是本 CM 或某个覆盖层 CM);
 # standalone(无 autoconfig)时可在此直接写死 workers。
 baseConfig: |
   server:
     host: "0.0.0.0"
     port: 8071
   cache:
-    threshold: 0.3
+    threshold: 0.1
+    balance_abs_threshold: 10
+    max_tree_size: 5000000
+    daily_cleanup_hour_utc: 21
+  proxy:
+    add_routed_peer_header: true
+    remote_media_url_policy: 400
   health:
     endpoint: "/health"
     interval_secs: 10
-  proxy:
-    add_routed_peer_header: true   # 回 x-routed-peer 头 → openresty forwarded_to 得真实后端 → bodylog 按后端聚合 → monitor per-model TPM 生效(其余 proxy 字段 serde 默认,含 connect_timeout_secs=2)
-  workers: []
+
+# 覆盖层:和底稿同一个 ConfigMap,额外 N 个 key,按本列表顺序追加到 `-c` 后面(底稿在最前)。
+# 后者覆盖前者:mapping 逐键合并,list/标量整体替换,空文件不生效。
+# 标 autoconfig: true 的那条(最多一条)归 autoconfig:chart 不渲染它的内容,ModelRoute.cart.outputKey
+# 指它,于是模板里没有这个 key,helm upgrade 永远不会盖掉 autoconfig 写进去的 workers。
+# 留空([])= 旧行为:autoconfig 直接重写底稿的 config.yaml。
+configOverlays: []
+#   - key: workers.yaml     # autoconfig 的落点;chart 不建这个 key,首次 reconcile 由 autoconfig 写出
+#     autoconfig: true
+#   - key: tuning.yaml      # chart 自己管的调参
+#     content: |
+#       cache:
+#         threshold: 0.3
 
 # launch_service 要求 ulimit -n ≥ 65535
 ulimitNofile: 65535
@@ -60,11 +76,13 @@ service:
 
 resources:
   requests: { cpu: 200m, memory: 256Mi }
-  limits: { cpu: "4", memory: 4Gi }
+  limits: { cpu: "4", memory: 16Gi }
 
 podAnnotations: {}
 nodeSelector: {}
 tolerations: []
+# 与 ha.enabled 的「主备分散到不同节点」叠加,不是替换:这里只写 nodeAffinity 时,
+# 那条 podAntiAffinity 仍在。自己写 podAntiAffinity 才会覆盖它。
 affinity: {}
 nameOverride: ""
 fullnameOverride: ""

@@ -1,0 +1,23 @@
+{{- if .Values.sloRequirement.enabled -}}
+{{- $slo := .Values.sloRequirement }}
+{{- $serviceId := $slo.serviceId | default (include "vllm.serviceId" .) }}
+{{- if hasKey ($slo.extraSpec | default dict) "serviceId" }}
+{{- fail "vllm: sloRequirement.extraSpec must not carry serviceId -- it comes from sloRequirement.serviceId (which defaults to the top-level serviceId), and a second copy renders a duplicate YAML key rather than an override" }}
+{{- end }}
+apiVersion: inference.x-k8s.io/v1alpha1
+kind: LLMSLORequirement
+metadata:
+  name: {{ $slo.name | default (include "vllm.serviceId" .) }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Release.Name }}-vllm
+  {{- with $slo.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  serviceId: {{ $serviceId | quote }}
+  {{- with $slo.extraSpec }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+{{- end -}}

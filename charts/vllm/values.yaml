@@ -16,6 +16,16 @@
 # The metrics mock and the CART subchart keep their own names and ignore this.
 fullnameOverride: ""
 
+# The id this service is known by OUTSIDE the cluster's object graph: the one
+# string the decision server, the SLO operator and the route all index it under.
+# Not a Kubernetes name, and never looked up from an object.
+#
+# Empty means vllm.fullname. It supplies the default for
+# scaler.customProvider.serviceId, sloRequirement.serviceId, sloRequirement.name,
+# modelRoute.slo.name and modelRoute.monitor.model -- each of which can still be
+# set on its own.
+serviceId: ""
+
 # Only used when scaler.enabled is false. With the scaler on, the chart omits
 # spec.replicas entirely so the operator can own it (see deployment.yaml), and
 # the starting count comes from scaler.minReplicas instead.
@@ -28,7 +38,9 @@ image:
 model:
   # The Hugging Face repo ID
   name: "facebook/opt-125m"
-  # Where the models are cached on the host node
+  # Where the models are cached on the host node. Empty means no model volume at
+  # all -- no hostPath, no mount -- which only makes sense under commandOverride
+  # below, since vLLM cannot start without --model.
   localPath: "/mnt/disk0/models/facebook/opt-125m"
   # Where localPath is mounted inside the container. Feeds both the volumeMount
   # and --model, so the two cannot drift apart.
@@ -42,6 +54,9 @@ model:
   # Leave empty to omit --max-model-len entirely and let vLLM use the model's
   # own. Only pin it when you really mean to cap the context.
   maxLen: "1024"
+  # Empty or "0" leaves nvidia.com/gpu off the pod entirely rather than
+  # requesting zero of it: the two schedule alike, but device plugins, GPU
+  # webhooks and quota all key off the key being there.
   gpus: "1"
 
 # Init container that checks the mounted model directory before the engine gets
@@ -63,7 +78,22 @@ modelCheck:
 # --tensor-parallel-size=2). The chart already emits --model,
 # --served-model-name, --host, --port and --shutdown-timeout, so do not repeat
 # those here.
+#
+# Rejected under commandOverride below, which leaves no command line to append to.
 extraArgs: []
+
+# The container's command, replacing the vLLM line the chart builds. Unset
+# (default) leaves that alone; defined takes it over completely -- no --model, no
+# --shutdown-timeout, and extraArgs is rejected. `[]` means the image's own
+# ENTRYPOINT.
+#
+# For running something that is not vLLM -- a mock server on service.port, to
+# exercise routing and scaling without GPUs or weights -- pair it with an empty
+# model.localPath and model.gpus, and turn modelCheck off.
+#
+# Use a values file for the `[]` form: `--set commandOverride={}` yields [""],
+# which no container can exec.
+commandOverride:
 
 service:
   type: ClusterIP
@@ -139,6 +169,13 @@ hangWatcher:
   livenessProbe:             # merged onto the engine container (3 x 15s = 45s of 503 before restart)
     periodSeconds: 15
     failureThreshold: 3
+  # Readiness on the SIDECAR ITSELF: a pod is an endpoint only while every container is ready,
+  # so a hang verdict drops it out of the Service without touching the engine's own probes.
+  # More aggressive (2 x 5s) than liveness because a wrong readiness only moves traffic.
+  # Startup is unaffected (healthy until the first scrape). Set to {} to drop it.
+  readinessProbe:
+    periodSeconds: 5
+    failureThreshold: 2
   resources:
     requests: { cpu: "10m", memory: "16Mi" }
     limits:   { cpu: "100m", memory: "64Mi" }
@@ -216,17 +253,21 @@ scaler:
 
   # Only read when metricProvider is Custom; ignored otherwise.
   customProvider:
-    # REQUIRED under Custom. Names the service whose decision to read. Sent as
-    # the serviceId query parameter, and matched against decisions[].serviceId in
-    # the reply -- the server is free to answer with more than it was asked for.
+    # serviceId override. Empty means the top-level serviceId.
     serviceId: ""
     # Request path on serverAddress. The CRD defaults it to /decisions; left
     # empty here so that default stands rather than being restated.
     path: ""
     # Narrows the match to decisions carrying this namespace, for a server that
-    # reports the same serviceId in several. Empty means serviceId alone selects
-    # the decision -- and a serviceId matching more than one is an error rather
-    # than a choice, so set this if the server can ever report duplicates.
+    # reports the same serviceId in several -- a serviceId matching more than one
+    # decision is an error rather than a choice.
+    #
+    # Empty (the default) means the RELEASE namespace, the one this deployment
+    # actually runs in, so a duplicate id reported from elsewhere in the cluster
+    # can never be the decision this scaler reads. Set it only when the server
+    # files this service's decisions under some other namespace than the one it
+    # is installed in; there is no way to ask for an unnarrowed match, because a
+    # decision for another namespace is not this release's to follow.
     namespace: ""
 
   # Required (and non-empty) under the Prometheus provider; ignored entirely
@@ -270,6 +311,28 @@ scaler:
     deletionCostQuery: ""
     # Example (scoped to this deployment via __SCOPE__):
     #   deletionCostQuery: 'vllm:kv_cache_usage_perc{__SCOPE__} * 100'
+
+# An LLMSLORequirement (inference.x-k8s.io/v1alpha1) filed for this service: the
+# latency targets the platform holds it to. modelRoute.slo below points openresty
+# at this same object, so the route's limits come from it instead of the static
+# ttft_limit_ms / tps_limit_tps.
+#
+# Requires the CRD, which ships with the inference operator.
+sloRequirement:
+  enabled: true
+  # metadata.name of the CR. Empty means the top-level serviceId, which is also
+  # what modelRoute.slo.name defaults to, so the route's reference resolves here.
+  name: ""
+  # spec.serviceId -- who the requirement is filed for. Empty means the top-level
+  # serviceId.
+  serviceId: ""
+  annotations: {}
+  # The rest of spec, passed through verbatim (latency targets and whatever else
+  # the operator grows). Open by design: that schema belongs to the inference
+  # operator, and a chart change per field would only lag it.
+  extraSpec: {}
+    # ttftMs: 20000
+    # tpotMs: 100
 
 # Deterministic scale-op simulation. When enabled, the scaler queries this mock
 # instead of real Prometheus, so you can drive scaling by hand: set `value`
@@ -326,18 +389,32 @@ serviceMonitor:
 # modelRoute.enabled off -- not a CART deployed alongside a route that ignores it.
 cart:
   enabled: false
+  # One ConfigMap, two keys: config.yaml is the chart's base (baseConfig below) and
+  # workers.yaml is autoconfig's, written off the ModelRoute. The chart's template
+  # never emits that key, so helm upgrade has nothing to patch there and the two stop
+  # contending over one document. modelRoute.cart.outputKey follows this.
+  configOverlays:
+    - key: workers.yaml
+      autoconfig: true
   # image:
   #   repository: harbor.4pd.io/hardcore-tech/cache_aware_router
   #   tag: ""            # defaults to the subchart's appVersion
   # CART's listen port, which the ModelRoute's cart.port follows.
   # service:
   #   port: 8071
-  # Per-model tuning of the config.yaml base that autoconfig refills the workers
-  # section of. Replaces the whole document, so copy the subchart's default first.
+  # Per-model tuning of the static config.yaml base (workers land in the override
+  # overlay above). Replaces the whole document, so copy the subchart's default first.
   # baseConfig: |
   #   ...
   # resources:
   #   limits: { cpu: "4", memory: 4Gi }
+  # Scheduling. CART is CPU-only, so it has no business occupying a GPU node --
+  # pin it away if yours are tainted or scarce. affinity ADDS to the subchart's
+  # HA anti-affinity (which keeps the two replicas off one node) instead of
+  # replacing it; write your own podAntiAffinity to override that.
+  # nodeSelector: {}
+  # tolerations: []
+  # affinity: {}
 
 # Publish this deployment to autoconfig as a ModelRoute
 # (routing.gpucluster.io/v1alpha1), so openresty's peers and the CART workers
@@ -375,6 +452,14 @@ modelRoute:
     # Ready endpoints only, by default. Endpoints being drained are excluded
     # either way.
     includeNotReady: false
+
+  slo:
+    # Off keeps the static ttft_limit_ms / tps_limit_tps in nginx.values.
+    enabled: true
+    # metadata.name of the LLMSLORequirement whose thresholds replace them.
+    # "ns/name" crosses namespaces. Empty means the top-level serviceId, which is
+    # also what sloRequirement.name defaults to, so the two meet by default.
+    name: ""
 
   # The openresty (nginx) route. This is the only required section.
   nginx:
@@ -455,7 +540,7 @@ modelRoute:
     # REQUIRED when enabled: monitor's ConfigMap ("ns/name"), shared across
     # models with one key per model.
     outputConfigMap: ""
-    # Defaults to model.name (what the chart passes to --served-model-name).
+    # Defaults to the top-level serviceId.
     model: ""
     # Empty means autoconfig derives it from the node's GPU label
     # (nvidia.com/gpu.product, set by GFD). Set it only to override that, or
@@ -518,6 +603,86 @@ resources: {}
   #   memory: 96Gi
   #   ephemeral-storage: 20Gi
 
+# securityContext for the vLLM container. Empty means the image's own.
+#
+# The one worth knowing about on an RDMA fabric is IPC_LOCK: without it the
+# container cannot raise its locked-memory limit and the driver cannot pin its
+# buffers. It is a single capability, not privileged mode:
+#
+#   securityContext:
+#     capabilities:
+#       add: ["IPC_LOCK"]
+securityContext: {}
+
+# Extra labels on the pods -- not on the Deployment object, and never on its
+# selector, which is immutable. The place for anything an admission webhook keys
+# off, e.g. rdma-injector's `rdma-ib: "true"`.
+podLabels: {}
+
+# A PodDisruptionBudget over the engine pods, so a node drain or a
+# cluster-autoscaler scale-down cannot take this model out all at once. The CART
+# subchart has its own (cart.podDisruptionBudget) and is unaffected by this.
+#
+# On by default, which is safe only because the default budget is
+# maxUnavailable: it is relative to the live replica count, so it can never
+# become unsatisfiable and never blocks a drain outright. At the chart's own
+# single-replica default it is simply a no-op (one replica, one disruption
+# allowed). Switching to minAvailable is what makes this object able to say no,
+# and that is the case to think before enabling -- see below.
+#
+# Read the header of templates/pdb.yaml before tuning this. The short version of
+# what a PDB is NOT: it does not keep replicas alive (a crash, an OOM kill or the
+# scaler scaling down are not disruptions it can refuse), and it does not govern
+# `helm upgrade` -- rollouts go through strategy instead.
+podDisruptionBudget:
+  enabled: true
+  annotations: {}
+
+  # Exactly one of minAvailable / maxUnavailable, the other left empty. The API
+  # server rejects a PDB with both or with neither, so the chart fails the render
+  # rather than let the install fail.
+  #
+  # maxUnavailable is the default here because it is the one that stays correct
+  # while the fleet resizes underneath it: "at most one at a time" means the same
+  # thing at 2 replicas and at 40, and it can never reach zero allowed
+  # disruptions, so a node drain always makes progress.
+  maxUnavailable: 1
+
+  # minAvailable is the other half, and the one to reach for when there is a
+  # floor that matters more than drain speed -- "keep at least 8 serving, take as
+  # many of the rest as you like".
+  #
+  # It has a foot-gun the chart guards against: disruptionsAllowed is
+  # (healthy - minAvailable), so a minAvailable that meets or exceeds the fleet's
+  # floor (scaler.minReplicas, or replicaCount without the scaler) allows ZERO
+  # evictions the moment the fleet is at that floor. A drain then blocks forever
+  # -- it retries rather than times out, and the scaler adds replicas for
+  # traffic, not because a drain is waiting. `minAvailable: 1` on a one-replica
+  # release is that mistake in its most common form, and rendering fails with the
+  # arithmetic spelled out.
+  #
+  # Percentages ("50%") are counted in PODS and rounded up.
+  minAvailable: ""
+
+  # AlwaysAllow | IfHealthyBudget | "" (leave the API server's default,
+  # IfHealthyBudget).
+  #
+  # This is the field that decides whether a drain can ever get unstuck. Under
+  # IfHealthyBudget a pod that is not Ready may only be evicted while the budget
+  # is already satisfied -- so a fleet that is one replica short cannot be
+  # drained at all, including the very pod that is stuck. On this chart "not
+  # Ready" is also the normal state for the ~20 minutes a large model spends
+  # loading, which makes that window routine rather than exceptional.
+  #
+  # AlwaysAllow gives up nothing real in exchange: an unready pod is serving no
+  # traffic, so evicting it costs a restart, not availability.
+  #
+  # Needs Kubernetes >= 1.27 (>= 1.26 with the PDBUnhealthyPodEvictionPolicy gate
+  # on). An older API server silently drops the field, which is the old
+  # behaviour rather than an error -- set it to "" if you would rather not carry
+  # a field your cluster ignores.
+  unhealthyPodEvictionPolicy: AlwaysAllow
+
 # How a `helm upgrade` -- or any change to the pod template -- replaces the
 # running pods.
 #
@@ -555,11 +720,21 @@ strategy:
 # 300s with the values above) plus image pull and scheduling. The chart
 # checks the probe half at render time; the pull is on you, and a multi-GB engine
 # image landing on a cold node can take several minutes on its own.
-progressDeadlineSeconds: 600
+progressDeadlineSeconds: 1800
 
 # How many old ReplicaSets to keep for rollback. They hold no pods, so this is
 # about rollback depth, not resources.
 revisionHistoryLimit: 10
+
+schedulerName: ""
+
+# PriorityClass for every pod this chart makes.
+#
+# It does not defragment anything. Preemption frees space on ONE node by killing
+# lower-priority pods there; it never repacks existing pods, and does nothing at
+# all if there is no lower-priority work to evict. What it does buy is queue
+# order and a say in who loses when capacity is short.
+priorityClassName: ""
 
 # Pin the GPU pods to particular nodes. `affinity` is the place for node
 # affinity / anti-affinity rules; nodeSelector and tolerations are the simpler
