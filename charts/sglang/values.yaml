@@ -685,7 +685,8 @@ env: []
   #       name: huggingface
   #       key: token
 
-# Host-level compile cache management (PyTorch Inductor, Triton, HuggingFace).
+# Host-level compile cache management (everything under SGLANG_CACHE_DIR: Triton,
+# Inductor, FlashInfer, DeepGEMM, the CUDA driver cache, plus HF_HOME).
 # Solves the dual problems of 40-minute cold-compilation restarts and concurrent
 # write corruption on shared hostPaths when multiple pods land on the same node.
 #
@@ -697,22 +698,31 @@ env: []
 #     node can ever share a cache directory.
 #   - Warm Reuse: A replacement pod on the same node acquires the released lock
 #     and reuses the warm cache, avoiding 20-40 min cold compilation.
-#   - In-Pod GC: Prunes old inactive template hashes when exceeding historyLimit,
-#     safely skipping any directories with active locks from draining pods.
+#   - In-Pod GC: Keeps historyLimit template hashes per model, the current one
+#     included, and prunes the older ones, safely skipping any still leased by
+#     running or draining pods.
 #
-# When enabled, the chart mounts the host cache and sets up symlinks and env vars
-# (TRITON_CACHE_DIR, TORCHINDUCTOR_CACHE_DIR, HF_HOME). Do not add a manual
-# dot-cache volume to volumes/volumeMounts when this is on.
+# When enabled, the chart mounts the host cache and the pod sets SGLANG_CACHE_DIR
+# to the slot it leases, and symlinks ~/.cache/sglang to it so sglang's own
+# default path resolves there as well. The per-library variables (TRITON_CACHE_DIR,
+# TORCHINDUCTOR_CACHE_DIR, ...) are deliberately left unset: setting one opts that
+# cache back out of SGLANG_CACHE_DIR and strands it inside the container. Do not
+# mount a volume at ~/.cache/sglang while this is on -- ~/.cache itself is fine.
+#
+# Requires an sglang new enough to honour SGLANG_CACHE_DIR.
 cache:
   enabled: false
   # Host directory root where model caches are stored.
   hostPath: "/mnt/disk0/sglang-cache"
+
   # Subdirectory suffix appended to hostPath to isolate cache directories between
   # different Helm installs on the same node.
   # Defaults to the Helm release fullname (include "sglang.fullname" .).
   # Set to "" to disable the suffix and mount hostPath directly.
   # hostPathSuffix: ""
-  # Keep at most N inactive template hash directories per model on each node.
+
+  # Template hash directories to keep per model on each node
+  # Older templates a pod still holds are never purged.
   historyLimit: 2
   # Maximum concurrent pod slots per node (e.g. 1 for 8-GPU, 4 for 2-GPU, up to 8).
   maxSlotsPerNode: 8

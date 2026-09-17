@@ -40,11 +40,14 @@
 {{- if and (not $override) (not $hasModel) }}
 {{- fail "sglang: model.localPath is empty while the chart is still building SGLang's command line, and SGLang cannot start without --model-path. Set commandOverride to run a non-SGLang image, or point model.localPath at the weights" }}
 {{- end }}
+{{- /* The cache manager replaces ~/.cache/sglang with a symlink to the slot it
+       leases, so a volume mounted there -- and only there -- would collide. A
+       mount on ~/.cache itself is fine: the symlink is made inside it. */}}
 {{- if $cacheEnabled }}
 {{- range $vm := $root.Values.volumeMounts }}
 {{- $mp := clean (toString $vm.mountPath) }}
-{{- if or (eq $mp "/root/.cache") (hasPrefix "/root/.cache/" $mp) }}
-{{- fail (printf "sglang: cache.enabled is true, but volumeMounts carries an extra mount to %s (volume %q). The managed cache automatically provisions and symlinks /root/.cache to isolated host slots; remove the manual volumeMount from values to prevent mount collisions" $vm.mountPath ($vm.name | default "unnamed")) }}
+{{- if or (eq $mp "/root/.cache/sglang") (hasPrefix "/root/.cache/sglang/" $mp) }}
+{{- fail (printf "sglang: cache.enabled is true, but volumeMounts carries a mount at %s (volume %q). That path is where the managed cache symlinks the host slot it leases; remove the manual volumeMount, or turn cache.enabled off and manage the directory yourself" $vm.mountPath ($vm.name | default "unnamed")) }}
 {{- end }}
 {{- end }}
 {{- end }}
