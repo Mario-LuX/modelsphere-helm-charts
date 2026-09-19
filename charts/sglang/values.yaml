@@ -698,7 +698,7 @@ env: []
 #     node can ever share a cache directory.
 #   - Warm Reuse: A replacement pod on the same node acquires the released lock
 #     and reuses the warm cache, avoiding 20-40 min cold compilation.
-#   - In-Pod GC: Keeps historyLimit template hashes per model, the current one
+#   - In-Pod GC: Keeps historyLimit template hashes per hostPathSuffix, the current one
 #     included, and prunes the older ones, safely skipping any still leased by
 #     running or draining pods.
 #
@@ -715,13 +715,18 @@ cache:
   # Host directory root where model caches are stored.
   hostPath: "/mnt/disk0/sglang-cache"
 
-  # Subdirectory suffix appended to hostPath to isolate cache directories between
-  # different Helm installs on the same node.
-  # Defaults to the Helm release fullname (include "sglang.fullname" .).
-  # Set to "" to disable the suffix and mount hostPath directly.
+  # Subdirectory of hostPath this release's caches live in. Defaults to
+  # model.name, with "/" and ":" folded to "--" -- so two releases serving the
+  # same model on one node SHARE their compiled kernels rather than each
+  # compiling a private copy, while different models stay apart. Sharing is safe:
+  # the template hash still separates incompatible images and flags, and the slot
+  # lease still keeps concurrent pods out of each other's directory.
+  #
+  # Set it explicitly to keep a release's cache to itself (the release name is
+  # the obvious choice), or to "" to mount hostPath directly.
   # hostPathSuffix: ""
 
-  # Template hash directories to keep per model on each node
+  # Template hash directories to keep in each hostPath subdirectory on a node
   # Older templates a pod still holds are never purged.
   historyLimit: 2
   # Maximum concurrent pod slots per node (e.g. 1 for 8-GPU, 4 for 2-GPU, up to 8).

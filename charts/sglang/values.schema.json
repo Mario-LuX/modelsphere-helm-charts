@@ -448,7 +448,7 @@
     "affinity": { "type": "object" },
 
     "cache": {
-      "description": "Host-level compile cache management (PyTorch Inductor, Triton, HuggingFace). Provides template-hash isolation, per-node slot leasing via kernel flock, warm reuse, and automatic garbage collection.",
+      "description": "Host-level compile cache management (everything under SGLANG_CACHE_DIR, plus HF_HOME). Provides template-hash isolation, per-node slot leasing via kernel flock, warm reuse, and automatic garbage collection.",
       "type": "object",
       "additionalProperties": false,
       "properties": {

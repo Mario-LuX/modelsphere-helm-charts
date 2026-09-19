@@ -72,6 +72,18 @@
 {{- end -}}
 
 {{/*
+  The per-model directory under cache.hostPath, and the default for
+  cache.hostPathSuffix -- so every release serving one model shares its warm
+  kernels on a node, instead of each install compiling its own copy.
+
+  model.name can be a HF repo id, so "/" and ":" fold to "--" rather than
+  turning one name into nested directories.
+*/}}
+{{- define "sglang.cacheModelDir" -}}
+{{- .Values.model.name | replace "/" "--" | replace ":" "--" -}}
+{{- end -}}
+
+{{/*
   Template hash for cache isolation. Evaluates all inputs that define compiled kernel compatibility:
   image repo & tag, model name, context length, extraArgs, and compiler-relevant environment variables.
 */}}

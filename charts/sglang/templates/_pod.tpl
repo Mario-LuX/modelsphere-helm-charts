@@ -29,7 +29,7 @@
 {{- $cmd := $root.Values.commandOverride }}
 {{- $override := not (kindIs "invalid" $cmd) }}
 {{- $cacheEnabled := and ($cache.enabled | default false) (not $override) }}
-{{- $cacheSuffix := ternary $cache.hostPathSuffix (include "sglang.fullname" $root) (not (kindIs "invalid" $cache.hostPathSuffix)) }}
+{{- $cacheSuffix := ternary $cache.hostPathSuffix (include "sglang.cacheModelDir" $root) (not (kindIs "invalid" $cache.hostPathSuffix)) }}
 {{- $cacheBaseHostPath := $cache.hostPath | default "/mnt/disk0/sglang-cache" | trimSuffix "/" }}
 {{- $cacheFullHostPath := ternary (printf "%s/%s" $cacheBaseHostPath $cacheSuffix) $cacheBaseHostPath (ne (toString $cacheSuffix) "") }}
 {{- /* Empty means no model volume: no hostPath, no mount. */}}
@@ -233,8 +233,6 @@ containers:
     {{- if $cacheEnabled }}
     - name: SGLANG_CACHE_HOST_DIR
       value: "/var/cache/sglang-host"
-    - name: SGLANG_CACHE_MODEL_NAME
-      value: {{ $root.Values.model.name | quote }}
     - name: SGLANG_CACHE_TEMPLATE_HASH
       value: {{ include "sglang.cacheTemplateHash" $root | quote }}
     - name: SGLANG_CACHE_MAX_SLOTS
