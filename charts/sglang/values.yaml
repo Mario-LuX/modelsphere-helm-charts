@@ -554,7 +554,12 @@ cart:
 # how many replicas there are, and autoconfig keeps the routes matching whatever
 # it decides. Neither needs the other.
 modelRoute:
-  enabled: false
+  # On by default: a CART (cart.enabled, also on by default) is only ever fed by
+  # the ModelRoute naming it -- autoconfig reads that CR to learn where to write
+  # the worker list, so a CART with no ModelRoute waits in Init and then
+  # CrashLoops on an empty list. Leaving this off while cart.enabled is on is
+  # therefore a combination that cannot work, and the two defaults must agree.
+  enabled: true
   # ModelRoute name; also the default openresty route (external path
   # 8080/<name>/) and the default monitor model name. Defaults to the release
   # name.
@@ -591,10 +596,13 @@ modelRoute:
     # openresty dict name, the unix socket name and the external path key, so it
     # must be [a-z0-9._-] only.
     route: ""
-    # REQUIRED: the ConfigMap autoconfig writes the route into ("ns/name"),
-    # shared by every model on one openresty with a key per route. There is no
-    # default the chart could guess -- e.g. llm-route/openresty-conf.
-    outputConfigMap: ""
+    # The ConfigMap autoconfig writes the route into ("ns/name"), shared by every
+    # model on one openresty with a key per route. Defaults to this cluster's
+    # shared openresty; point it elsewhere (and set service below) when this
+    # release's openresty lives somewhere else. Still REQUIRED in the sense that
+    # the chart cannot derive it -- leaving it empty is a render-time failure,
+    # not a route without a destination.
+    outputConfigMap: "llm-route/openresty-conf"
     # Optional openresty entrypoint Service ("ns/name"). Feeds monitor's nginx
     # row and makes entrypoint scaling event-driven. Falls back to selector when
     # empty; service wins when both are set.
@@ -661,9 +669,10 @@ modelRoute:
   # 60s on its own, so no sidecar is involved.
   monitor:
     enabled: true
-    # REQUIRED when enabled: monitor's ConfigMap ("ns/name"), shared across
-    # models with one key per model.
-    outputConfigMap: ""
+    # Monitor's ConfigMap ("ns/name"), shared across models with one key per
+    # model. Defaults to this cluster's monitor; still REQUIRED when enabled --
+    # the chart cannot derive it, so empty is a render-time failure.
+    outputConfigMap: "monitoring/monitor-conf"
     # Defaults to model.name (what the chart passes to --served-model-name).
     model: ""
     # Empty means autoconfig derives it from the node's GPU label
