@@ -81,8 +81,12 @@
         },
         "mountPath": { "type": "string", "minLength": 1 },
         "hostPathType": { "type": "string" },
+        "contextLength": {
+          "description": "Rendered as --max-model-len. Quoted in values.yaml, and empty means \"let vLLM use the model's own\". An integer is accepted too.",
+          "type": ["string", "integer"]
+        },
         "maxLen": {
-          "description": "Quoted in values.yaml, and empty means \"let vLLM use the model's own\". An integer is accepted too.",
+          "description": "Deprecated: the old name of contextLength. When set, it is used instead of contextLength.",
           "type": ["string", "integer"]
         },
         "gpus": {
