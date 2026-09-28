@@ -28,7 +28,7 @@
 {{- end }}
 {{- if $custom }}
   {{- if .Values.metricsMock.enabled }}
-  {{- fail "vllm: metricsMock.enabled stands up a Prometheus query API, which the Custom provider never calls -- it reads a replica count off a decision server instead. Turn the mock off, or leave scaler.metricProvider on Prometheus" }}
+  {{- fail "vllm: metricsMock.enabled stands up a Prometheus query API, which the Custom provider never calls -- it reads a replica count off a decision server instead. Turn the mock off, or set scaler.metricProvider: Prometheus" }}
   {{- end }}
 {{- else }}
   {{- if not $s.metrics }}

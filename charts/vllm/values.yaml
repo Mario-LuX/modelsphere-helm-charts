@@ -286,14 +286,18 @@ scaler:
   #
   # Which one is in play also decides what serverAddress means, what has to be
   # filled in below, and whether scaleDown.deletionCostQuery is consulted.
-  metricProvider: Prometheus
+  #
+  # Custom by default, as in the sglang chart: the replica count comes from the
+  # stack's decision server (decision-gen), which reads this release's
+  # LLMSLORequirement below.
+  metricProvider: Custom
 
   # The metric source endpoint. Under Prometheus it is the query API (the
   # /api/v1/query base) -- the default below is the headless Service the
   # Prometheus Operator creates, adjust it to your cluster, and note vLLM is
   # scraped into it via the serviceMonitor further down. Under Custom it is
   # instead the decision server's base URL, e.g. http://decisions:80.
-  serverAddress: "http://prometheus-operated.monitoring.svc:9090"
+  serverAddress: "http://decision-gen.llm-scaler.svc:80"
   # Optional HTTP headers sent with every fetch from serverAddress (e.g. auth for
   # a secured endpoint). Used verbatim. Empty for a typical in-cluster
   # Prometheus. Applies to both providers.
@@ -351,7 +355,7 @@ scaler:
     # Hold at the highest recommendation over this window before scaling down, so
     # a brief metric dip doesn't cause flapping (scale-up stays immediate).
     # 0 disables it (keeps the metricsMock demo snappy); set e.g. 300 in prod.
-    stabilizationWindowSeconds: 0
+    stabilizationWindowSeconds: 10
     # Cap on how many replicas one scale-down step removes, so the fleet walks
     # down instead of bursting from N to minReplicas. 0 disables the cap (keeps
     # the metricsMock demo snappy); set e.g. 1 in prod.
