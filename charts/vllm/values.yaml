@@ -51,9 +51,10 @@ model:
   # the engine, which then fails minutes later with an error pointing at the
   # model rather than at the mount.
   hostPathType: Directory
-  # Leave empty to omit --max-model-len entirely and let vLLM use the model's
-  # own. Only pin it when you really mean to cap the context.
-  maxLen: "1024"
+  # Rendered as --max-model-len. Empty (the default) omits it, so vLLM uses the
+  # model's own. Only set it when you really mean to cap the context. Same key
+  # as the sglang chart; the old name model.maxLen is still read.
+  contextLength: ""
   # Empty or "0" leaves nvidia.com/gpu off the pod entirely rather than
   # requesting zero of it: the two schedule alike, but device plugins, GPU
   # webhooks and quota all key off the key being there.

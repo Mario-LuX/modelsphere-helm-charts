@@ -53,8 +53,14 @@
       (printf "--served-model-name=%s" .Values.model.name)
       "--host=0.0.0.0"
       (printf "--port=%v" .Values.service.port) }}
-{{- /* Left out when empty, so vLLM uses the model's own max length. */}}
-{{- with .Values.model.maxLen }}
+{{- /* Left out when empty, so vLLM uses the model's own max length.
+       model.maxLen is the old name of model.contextLength and still wins when
+       set, so values written for earlier chart versions keep their meaning. */}}
+{{- $ctxLen := .Values.model.contextLength }}
+{{- if hasKey .Values.model "maxLen" }}
+{{- $ctxLen = .Values.model.maxLen }}
+{{- end }}
+{{- with $ctxLen }}
 {{- $flags = append $flags (printf "--max-model-len=%v" .) }}
 {{- end }}
 {{- /* Once SIGTERM arrives, give requests that are still running this long to
