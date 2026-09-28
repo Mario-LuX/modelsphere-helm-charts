@@ -21,7 +21,7 @@ PAGE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ModelPilot Helm Charts</title>
+<title>ModelSphere Helm Charts</title>
 <style>
   :root {{ color-scheme: light dark; --fg:#1a1a1a; --bg:#fff; --muted:#666; --line:#e2e2e2; --code-bg:#f5f5f5; }}
   @media (prefers-color-scheme: dark) {{
@@ -32,6 +32,9 @@ PAGE = """<!doctype html>
   main {{ max-width:56rem; margin:0 auto; }}
   h1 {{ font-size:1.8rem; margin:0 0 .4rem; }}
   p.lede {{ color:var(--muted); margin:0 0 2rem; }}
+  header {{ display:flex; align-items:center; gap:1rem; margin:0 0 2rem; }}
+  header img {{ width:72px; height:72px; border-radius:12px; flex:none; }}
+  header .lede {{ margin:0; }}
   pre {{ background:var(--code-bg); border:1px solid var(--line); border-radius:6px;
         padding:.9rem 1rem; overflow-x:auto; }}
   code {{ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.9em; }}
@@ -47,8 +50,14 @@ PAGE = """<!doctype html>
 </head>
 <body>
 <main>
-  <h1>ModelPilot Helm Charts</h1>
-  <p class="lede">Helm charts for running large language models on Kubernetes.</p>
+  <header>
+    <img src="https://avatars.githubusercontent.com/u/331933824?s=144&amp;v=4"
+         alt="" width="72" height="72">
+    <div>
+      <h1>ModelSphere Helm Charts</h1>
+      <p class="lede">Helm charts for running large language models on Kubernetes.</p>
+    </div>
+  </header>
 
 <pre><code>helm repo add modelsphere https://modelsphere.github.io/helm-charts
 helm repo update
