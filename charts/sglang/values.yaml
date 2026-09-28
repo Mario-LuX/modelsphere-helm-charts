@@ -98,9 +98,9 @@ model:
   # the engine, which then fails minutes later with an error pointing at the
   # model rather than at the mount.
   hostPathType: Directory
-  # Leave empty to omit --context-length entirely and let SGLang use the model's
-  # own. Only pin it when you really mean to cap the context.
-  contextLength: "1024"
+  # Empty (the default) omits --context-length, so SGLang uses the model's own.
+  # Only set it when you really mean to cap the context.
+  contextLength: ""
   # Empty or "0" leaves nvidia.com/gpu off the pod entirely rather than
   # requesting zero of it: the two schedule alike, but device plugins, GPU
   # webhooks and quota all key off the key being there.
