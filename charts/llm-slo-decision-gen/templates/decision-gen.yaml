@@ -6,13 +6,18 @@ metadata:
   name: decision-gen
   namespace: {{ include "llm-slo.namespace" . }}
   labels:
+    {{- include "llm-slo.labels" . | nindent 4 }}
     app: decision-gen
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: decision-gen
+  # Release-scoped — see llm-slo.decisionGen.clusterRoleName. Upgrading from
+  # chart <0.3.0 replaces the bare "decision-gen" ClusterRole; Helm deletes
+  # the old one as part of the release. See NOTES.txt.
+  name: {{ include "llm-slo.decisionGen.clusterRoleName" . }}
   labels:
+    {{- include "llm-slo.labels" . | nindent 4 }}
     app: decision-gen
 rules:
   # Aligned with operator/config/rbac/rbac.yaml — do not add rules here that
@@ -46,13 +51,14 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: decision-gen
+  name: {{ include "llm-slo.decisionGen.clusterRoleName" . }}
   labels:
+    {{- include "llm-slo.labels" . | nindent 4 }}
     app: decision-gen
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: decision-gen
+  name: {{ include "llm-slo.decisionGen.clusterRoleName" . }}
 subjects:
   - kind: ServiceAccount
     name: decision-gen
@@ -64,6 +70,7 @@ metadata:
   name: decision-gen
   namespace: {{ include "llm-slo.namespace" . }}
   labels:
+    {{- include "llm-slo.labels" . | nindent 4 }}
     app: decision-gen
 spec:
   type: ClusterIP
@@ -81,6 +88,7 @@ metadata:
   name: decision-gen
   namespace: {{ include "llm-slo.namespace" . }}
   labels:
+    {{- include "llm-slo.labels" . | nindent 4 }}
     app: decision-gen
 spec:
   replicas: {{ .Values.decisionGen.replicas }}
@@ -95,6 +103,7 @@ spec:
   template:
     metadata:
       labels:
+        {{- include "llm-slo.labels" . | nindent 8 }}
         app: decision-gen
     spec:
       serviceAccountName: decision-gen
@@ -139,6 +148,7 @@ metadata:
   name: decision-gen-unstable
   namespace: {{ include "llm-slo.namespace" . }}
   labels:
+    {{- include "llm-slo.labels" . | nindent 4 }}
     app: decision-gen-unstable
 spec:
   type: ClusterIP
@@ -156,6 +166,7 @@ metadata:
   name: decision-gen-unstable
   namespace: {{ include "llm-slo.namespace" . }}
   labels:
+    {{- include "llm-slo.labels" . | nindent 4 }}
     app: decision-gen-unstable
 spec:
   replicas: {{ .Values.decisionGen.unstable.replicas }}
@@ -170,11 +181,13 @@ spec:
   template:
     metadata:
       labels:
+        {{- include "llm-slo.labels" . | nindent 8 }}
         app: decision-gen-unstable
     spec:
       serviceAccountName: decision-gen
       containers:
         - name: decision-gen
+          # Same image as stable; unstable differs only by env (LOG_LEVEL=DEBUG).
           image: "{{ .Values.decisionGen.image.repository }}:{{ .Values.decisionGen.image.tag }}"
           imagePullPolicy: {{ .Values.decisionGen.image.pullPolicy }}
           ports:

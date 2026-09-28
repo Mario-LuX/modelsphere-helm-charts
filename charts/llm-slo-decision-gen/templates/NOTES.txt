@@ -1,29 +1,53 @@
-slo-decision-gen ({{ .Chart.Name }}-{{ .Chart.Version }}) installed into namespace {{ include "llm-slo.namespace" . }}.
+llm-slo-decision-gen ({{ .Chart.Name }}-{{ .Chart.Version }}) installed into namespace {{ include "llm-slo.namespace" . }}.
+
+Workloads use values.namespace (default llm-scaler), not Release.Namespace,
+so Service DNS stays http://decision-gen.{{ include "llm-slo.namespace" . }}.svc:{{ .Values.decisionGen.service.port }}.
 
 Components:
 {{- if .Values.decisionGen.enabled }}
   decision-gen (replicaCount={{ .Values.decisionGen.replicas }})            http://decision-gen.{{ include "llm-slo.namespace" . }}.svc:{{ .Values.decisionGen.service.port }}
   {{- if .Values.decisionGen.unstable.enabled }}
   decision-gen-unstable (replicaCount={{ .Values.decisionGen.unstable.replicas }})  http://decision-gen-unstable.{{ include "llm-slo.namespace" . }}.svc:{{ .Values.decisionGen.service.port }}
+    (same image as stable + LOG_LEVEL=DEBUG; no distinct unstable tag)
+  {{- else }}
+  decision-gen-unstable: disabled (set decisionGen.unstable.enabled=true for DEBUG twin)
   {{- end }}
 {{- end }}
 {{- if .Values.sloApi.enabled }}
   slo-api (replicaCount={{ .Values.sloApi.replicas }})                  http://slo-api.{{ include "llm-slo.namespace" . }}.svc:{{ .Values.sloApi.service.port }}
+
+  WARNING: slo-api image {{ .Values.sloApi.image.repository }}:{{ .Values.sloApi.image.tag }} is
+  incompatible with the inference.modelsphere.dev CRDs this chart installs
+  (still targets the old API group). Leave sloApi.enabled=false until a fixed
+  image is published.
+{{- else }}
+  slo-api: disabled (recommended — v0.1 is incompatible with inference.modelsphere.dev CRDs)
 {{- end }}
+
+CRDs owned by this chart (helm.sh/resource-policy: keep — survive uninstall):
+  llmslorequirements.inference.modelsphere.dev  (LLMSLORequirement)
+  jobslorequirements.inference.modelsphere.dev  (JobSLORequirement)
+
+  Helm applies crds/ before NOTES on install. If they are missing afterwards:
+    kubectl get crd llmslorequirements.inference.modelsphere.dev jobslorequirements.inference.modelsphere.dev
 
 External dependency NOT managed by this chart:
   The CustomResourceDefinition `llmscalers.autoscaling.modelsphere.dev`, together with
   the operator that reconciles it, is shipped by the separate
   `llmscaleoperator` chart (namespace `llmscaleoperator-system`).
-  This release ships its own `llmslorequirements.inference.modelsphere.dev` and
-  `jobslorequirements.inference.modelsphere.dev` CRDs under crds/, plus the
-  services that expose them.
 
   Verify with:
     kubectl api-resources | grep -E 'llmscaler|llmslo|jobslo'
 
   If LLMScaler is missing, install llmscaleoperator before expecting it
   to reconcile.
+
+Upgrade notes (from chart <0.3.0):
+  - ClusterRole/Binding names are now release-scoped
+    ({{ include "llm-slo.decisionGen.clusterRoleName" . }}, not bare "decision-gen").
+    Helm replaces the old names as part of the release; Service DNS is unchanged.
+  - decisionGen.unstable.enabled defaults to false (was true). Re-enable if you
+    still need the DEBUG twin Service.
 
 {{- if .Values.sloApi.enabled }}
 Token (auto-generated unless pinned via values.sloApi.token):

@@ -6,13 +6,15 @@ metadata:
   name: slo-api
   namespace: {{ include "llm-slo.namespace" . }}
   labels:
+    {{- include "llm-slo.labels" . | nindent 4 }}
     app: slo-api
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: slo-api
+  name: {{ include "llm-slo.sloApi.clusterRoleName" . }}
   labels:
+    {{- include "llm-slo.labels" . | nindent 4 }}
     app: slo-api
 rules:
   # slo-api stores SLO configs but does not own CR lifecycle: the operator
@@ -36,13 +38,14 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: slo-api
+  name: {{ include "llm-slo.sloApi.clusterRoleName" . }}
   labels:
+    {{- include "llm-slo.labels" . | nindent 4 }}
     app: slo-api
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: slo-api
+  name: {{ include "llm-slo.sloApi.clusterRoleName" . }}
 subjects:
   - kind: ServiceAccount
     name: slo-api
@@ -68,6 +71,7 @@ metadata:
   name: {{ $secretName }}
   namespace: {{ $ns }}
   labels:
+    {{- include "llm-slo.labels" . | nindent 4 }}
     app: slo-api
 type: Opaque
 stringData:
@@ -79,6 +83,7 @@ metadata:
   name: slo-api
   namespace: {{ include "llm-slo.namespace" . }}
   labels:
+    {{- include "llm-slo.labels" . | nindent 4 }}
     app: slo-api
 spec:
   type: ClusterIP
@@ -96,6 +101,7 @@ metadata:
   name: slo-api
   namespace: {{ include "llm-slo.namespace" . }}
   labels:
+    {{- include "llm-slo.labels" . | nindent 4 }}
     app: slo-api
 spec:
   replicas: {{ .Values.sloApi.replicas }}
@@ -110,6 +116,7 @@ spec:
   template:
     metadata:
       labels:
+        {{- include "llm-slo.labels" . | nindent 8 }}
         app: slo-api
     spec:
       serviceAccountName: slo-api

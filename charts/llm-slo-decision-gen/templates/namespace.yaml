@@ -3,4 +3,5 @@ kind: Namespace
 metadata:
   name: {{ include "llm-slo.namespace" . }}
   labels:
+    {{- include "llm-slo.labels" . | nindent 4 }}
     kubernetes.io/metadata.name: {{ include "llm-slo.namespace" . }}

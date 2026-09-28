@@ -1,15 +1,21 @@
-# Default settings for the slo-decision-gen chart.
+# Default settings for the llm-slo-decision-gen chart.
 
 # Both services live in one namespace. This matches the prod layout where
 # LLMScaler.customProvider.serverAddress resolves as
 # http://decision-gen.<ns>.svc:80.
+#
+# Intentionally NOT Release.Namespace: Service DNS names (decision-gen,
+# decision-gen-unstable, slo-api) are fixed, and downstream charts / LLMScaler
+# objects hard-code llm-scaler in the FQDN. Installing with
+# `helm install -n other` still places workloads in values.namespace.
+# Changing this breaks existing consumers unless you also retarget them.
 namespace: llm-scaler
 
 # ---------------------------------------------------------------------------
 # decision-gen: emits per-service replica decisions on :8080/decisions.
-# The "unstable" variant carries a different label so a ModelRoute /
-# LLMScaler can opt into the bleeding-edge decisions by choosing that
-# Service, without affecting consumers of the stable endpoint.
+# The "unstable" variant (when enabled) is a second Deployment/Service so a
+# ModelRoute / LLMScaler can opt into a debug-logging instance without
+# affecting consumers of the stable endpoint.
 # ---------------------------------------------------------------------------
 decisionGen:
   enabled: true
@@ -49,11 +55,14 @@ decisionGen:
   # Env is verbatim. No secrets required.
   env: []
 
-  # The "unstable" variant. Existing producers read this address when they
-  # want the in-development behaviour; consumers of the stable one are
-  # unaffected.
+  # Optional second Deployment/Service (decision-gen-unstable). Mirrors the
+  # source repo's config/manager/manager-unstable.yaml: SAME image as stable,
+  # with LOG_LEVEL=DEBUG. There is no distinct "unstable" image tag on
+  # Docker Hub (4pdosc/llm-scaler-decision-gen only publishes numbered
+  # releases). Off by default so a normal install does not run two copies;
+  # set enabled: true if you want the debug endpoint.
   unstable:
-    enabled: true
+    enabled: false
     replicas: 1
     env:
       - name: LOG_LEVEL
@@ -67,16 +76,15 @@ decisionGen:
         memory: 256Mi
 
 # ---------------------------------------------------------------------------
-# slo-api: stores SLO configs used by rest of the platform. Holds a token
-# secret (auto-generated at install when token is empty).
+# slo-api: optional HTTP/UI for editing LLMSLORequirement / JobSLORequirement
+# specs by route. Holds a token secret (auto-generated at install when token
+# is empty). Nothing else in the stack calls it. Off by default.
+#
+# The image must be 0.2.0 or newer: v0.1 looks for LLMSLORequirement under
+# inference.x-k8s.io only, and would find nothing on a cluster that has
+# migrated. 0.2.0 asks the API server which group it serves.
 # ---------------------------------------------------------------------------
 sloApi:
-  # Off by default: slo-api is an optional HTTP/UI front end for editing
-  # LLMSLORequirement specs by route; nothing else in the stack calls it.
-  # Set to true if you want it.
-  # The image must be 0.2.0 or newer: v0.1 looks for LLMSLORequirement under
-  # inference.x-k8s.io only, and would find nothing on a cluster that has
-  # migrated. 0.2.0 asks the API server which group it serves.
   enabled: false
   replicas: 1
   image:
