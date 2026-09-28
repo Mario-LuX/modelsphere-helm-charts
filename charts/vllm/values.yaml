@@ -119,9 +119,9 @@ startupProbe:
   httpGet:
     path: /health
     port: http
-  periodSeconds: 10
-  timeoutSeconds: 5
-  failureThreshold: 30
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 180         # 180 x 30s = 90 minutes to load
 readinessProbe:
   httpGet:
     path: /health
@@ -235,7 +235,7 @@ hangWatcher:
 # kills the pod partway through and any request still running dies with it. The
 # chart checks this when it renders, so a bad combination fails `helm install`
 # instead of quietly dropping requests later.
-terminationGracePeriodSeconds: 60
+terminationGracePeriodSeconds: 3600
 lifecycle:
   preStop:
     enabled: true
@@ -254,9 +254,9 @@ lifecycle:
     # finish. The hook watches vLLM's own metrics and moves on as soon as the
     # server goes idle, so a quiet pod shuts down in about endpointSyncSeconds
     # instead of always waiting this long.
-    drainSeconds: 30
+    drainSeconds: 600
     # How often to re-check whether vLLM has gone idle.
-    pollIntervalSeconds: 2
+    pollIntervalSeconds: 5
   # Stage 2: how long in-flight requests get after SIGTERM lands.
   #
   # 0 means --shutdown-timeout is not passed, leaving vLLM's own behaviour:
@@ -784,10 +784,10 @@ strategy:
 # model that is simply slow to load.
 #
 # It has to clear the startupProbe budget (failureThreshold x periodSeconds,
-# 300s with the values above) plus image pull and scheduling. The chart
+# 5400s with the values above) plus image pull and scheduling. The chart
 # checks the probe half at render time; the pull is on you, and a multi-GB engine
 # image landing on a cold node can take several minutes on its own.
-progressDeadlineSeconds: 1800
+progressDeadlineSeconds: 7200
 
 # How many old ReplicaSets to keep for rollback. They hold no pods, so this is
 # about rollback depth, not resources.
