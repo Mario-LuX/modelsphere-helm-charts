@@ -179,9 +179,9 @@ startupProbe:
   httpGet:
     path: /health
     port: http
-  periodSeconds: 10
-  timeoutSeconds: 5
-  failureThreshold: 30
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 180         # 180 x 30s = 90 minutes to load
 # Readiness uses the DEEP endpoint: /v1/models and the shallow /health answer from cached
 # frontend state and never touch the scheduler, so they return 200 straight through a wedged
 # detokenizer (measured: 158s Ready and still taking traffic). /health_generate covers the
@@ -319,7 +319,7 @@ hangWatcher:
 #
 # So size the grace period past your longest generation, not just past the
 # numbers below.
-terminationGracePeriodSeconds: 60
+terminationGracePeriodSeconds: 3600
 lifecycle:
   preStop:
     enabled: true
@@ -341,9 +341,9 @@ lifecycle:
     #
     # Doing the draining HERE, where it is bounded, is what keeps the unbounded
     # post-SIGTERM drain from running into the SIGKILL deadline.
-    drainSeconds: 30
+    drainSeconds: 600
     # How often to re-check whether SGLang has gone idle.
-    pollIntervalSeconds: 2
+    pollIntervalSeconds: 5
   # Stage 2: time reserved for SGLang's own shutdown after SIGTERM -- headroom
   # kept free in the grace period, and the chart checks it fits. Under
   # lws.leaderPreStopKill it is also how long the hook waits after its own
@@ -358,7 +358,7 @@ lifecycle:
   # runs. This is a REQUEST to the engine, and an engine that never reads it -- a
   # version that dropped the variable, or a pod deleted mid-load before the signal
   # handler exists -- simply ignores it. preStopKill below is the enforcement.
-  forceShutdown: false
+  forceShutdown: true
   # Whether the preStop hook ends by killing SGLang itself: SIGTERM to PID 1, then
   # SIGKILL to its children after shutdownReserveSeconds if it is still up. Unlike
   # forceShutdown this needs no cooperation from the engine, which is what makes it
@@ -850,7 +850,7 @@ strategy:
     maxSurge: 1
     maxUnavailable: 0
 
-progressDeadlineSeconds: 1800
+progressDeadlineSeconds: 7200
 
 # How many old ReplicaSets to keep for rollback. They hold no pods, so this is
 # about rollback depth, not resources.
