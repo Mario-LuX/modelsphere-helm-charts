@@ -1,0 +1,63 @@
+{{- if .Values.sloApi.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: slo-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-slo.labels" . | nindent 4 }}
+    app: slo-api
+spec:
+  replicas: {{ .Values.sloApi.replicas }}
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: slo-api
+  template:
+    metadata:
+      labels:
+        {{- include "llm-slo.labels" . | nindent 8 }}
+        app: slo-api
+    spec:
+      serviceAccountName: slo-api
+      containers:
+        - name: slo-api
+          image: "{{ .Values.sloApi.image.repository }}:{{ .Values.sloApi.image.tag }}"
+          imagePullPolicy: {{ .Values.sloApi.image.pullPolicy }}
+          ports:
+            - name: {{ .Values.sloApi.container.name }}
+              containerPort: {{ .Values.sloApi.container.port }}
+              protocol: TCP
+          env:
+            - name: PORT
+              value: {{ .Values.sloApi.container.port | quote }}
+            - name: SLO_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: slo-api
+                  key: token
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.sloApi.probes.liveness.path }}
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: {{ .Values.sloApi.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.sloApi.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.sloApi.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.sloApi.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.sloApi.probes.readiness.path }}
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: {{ .Values.sloApi.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.sloApi.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.sloApi.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.sloApi.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.sloApi.resources | nindent 12 }}
+{{- end }}

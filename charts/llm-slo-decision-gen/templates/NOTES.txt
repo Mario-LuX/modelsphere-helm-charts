@@ -1,20 +1,20 @@
-llm-slo-decision-gen ({{ .Chart.Name }}-{{ .Chart.Version }}) installed into namespace {{ include "llm-slo.namespace" . }}.
+llm-slo-decision-gen ({{ .Chart.Name }}-{{ .Chart.Version }}) installed into namespace {{ .Release.Namespace }}.
 
-Workloads use values.namespace (default llm-scaler), not Release.Namespace,
-so Service DNS stays http://decision-gen.{{ include "llm-slo.namespace" . }}.svc:{{ .Values.decisionGen.service.port }}.
+Service DNS: http://decision-gen.{{ .Release.Namespace }}.svc:{{ .Values.decisionGen.service.port }}
+(install with `helm install -n <ns>`; this chart does not manage Namespace resources).
 
 Components:
 {{- if .Values.decisionGen.enabled }}
-  decision-gen (replicaCount={{ .Values.decisionGen.replicas }})            http://decision-gen.{{ include "llm-slo.namespace" . }}.svc:{{ .Values.decisionGen.service.port }}
+  decision-gen (replicaCount={{ .Values.decisionGen.replicas }})            http://decision-gen.{{ .Release.Namespace }}.svc:{{ .Values.decisionGen.service.port }}
   {{- if .Values.decisionGen.unstable.enabled }}
-  decision-gen-unstable (replicaCount={{ .Values.decisionGen.unstable.replicas }})  http://decision-gen-unstable.{{ include "llm-slo.namespace" . }}.svc:{{ .Values.decisionGen.service.port }}
+  decision-gen-unstable (replicaCount={{ .Values.decisionGen.unstable.replicas }})  http://decision-gen-unstable.{{ .Release.Namespace }}.svc:{{ .Values.decisionGen.service.port }}
     (same image as stable + LOG_LEVEL=DEBUG; no distinct unstable tag)
   {{- else }}
   decision-gen-unstable: disabled (set decisionGen.unstable.enabled=true for DEBUG twin)
   {{- end }}
 {{- end }}
 {{- if .Values.sloApi.enabled }}
-  slo-api (replicaCount={{ .Values.sloApi.replicas }})                  http://slo-api.{{ include "llm-slo.namespace" . }}.svc:{{ .Values.sloApi.service.port }}
+  slo-api (replicaCount={{ .Values.sloApi.replicas }})                  http://slo-api.{{ .Release.Namespace }}.svc:{{ .Values.sloApi.service.port }}
 
   WARNING: slo-api image {{ .Values.sloApi.image.repository }}:{{ .Values.sloApi.image.tag }} is
   incompatible with the inference.modelsphere.dev CRDs this chart installs
@@ -48,9 +48,11 @@ Upgrade notes (from chart <0.3.0):
     Helm replaces the old names as part of the release; Service DNS is unchanged.
   - decisionGen.unstable.enabled defaults to false (was true). Re-enable if you
     still need the DEBUG twin Service.
+  - Workloads use Release.Namespace (helm -n); the chart no longer creates or
+    patches a Namespace resource.
 
 {{- if .Values.sloApi.enabled }}
 Token (auto-generated unless pinned via values.sloApi.token):
-  kubectl -n {{ include "llm-slo.namespace" . }} get secret slo-api \
+  kubectl -n {{ .Release.Namespace }} get secret slo-api \
       -o jsonpath='{.data.token}' | base64 -d && echo
 {{- end }}

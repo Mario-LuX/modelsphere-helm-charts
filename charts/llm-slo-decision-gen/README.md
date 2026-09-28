@@ -4,12 +4,12 @@ Turns SLO requirements into replica recommendations: a `decision-gen` service
 plus optional `slo-api`, and the two CRDs they read.
 
 ```bash
-helm install llm-slo modelsphere/llm-slo-decision-gen
+helm install llm-slo modelsphere/llm-slo-decision-gen -n llm-scaler --create-namespace
 ```
 
-Workloads land in `values.namespace` (default `llm-scaler`), not
-`Release.Namespace`, so DNS stays `http://decision-gen.llm-scaler.svc:80`
-for `LLMScaler.customProvider.serverAddress`.
+Workloads use `{{ .Release.Namespace }}` (set with `helm install -n`). Service
+DNS is `http://decision-gen.<namespace>.svc:80` for
+`LLMScaler.customProvider.serverAddress`.
 
 ## What this chart owns
 
@@ -19,6 +19,9 @@ for `LLMScaler.customProvider.serverAddress`.
 | `decision-gen-unstable` (optional) | Same image + `LOG_LEVEL=DEBUG`; off by default |
 | `slo-api` (optional) | **Leave disabled** — published `v0.1` still targets the old API group |
 | CRDs `LLMSLORequirement`, `JobSLORequirement` | Under `inference.modelsphere.dev`; annotated `helm.sh/resource-policy: keep` |
+
+This chart does **not** create or patch Namespace resources. Create the target
+namespace yourself (or pass `--create-namespace`).
 
 `LLMScaler` and its operator live in the separate `llmscaleoperator` chart.
 

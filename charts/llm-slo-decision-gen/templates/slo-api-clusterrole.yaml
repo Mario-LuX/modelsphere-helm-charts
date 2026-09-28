@@ -1,0 +1,27 @@
+{{- if .Values.sloApi.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "llm-slo.sloApi.clusterRoleName" . }}
+  labels:
+    {{- include "llm-slo.labels" . | nindent 4 }}
+    app: slo-api
+rules:
+  # slo-api stores SLO configs but does not own CR lifecycle: the operator
+  # creates/deletes CRs and writes /status. slo-api only reads + patches
+  # existing ones in place.
+  #
+  # BOTH groups. The CRDs are moving from inference.x-k8s.io to
+  # inference.modelsphere.dev and clusters are on either side of that; from
+  # 0.2.0 the image asks the API server which one it serves and uses that.
+  # Granting only the new group leaves it able to choose a group it cannot
+  # read, and RBAC denial looks exactly like an empty cluster: the pod stays
+  # Running, the watch retries, and GET /config answers with an empty list.
+  - apiGroups: ["inference.modelsphere.dev", "inference.x-k8s.io"]
+    resources: ["llmslorequirements"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  # Same contract for async-job SLOs.
+  - apiGroups: ["inference.modelsphere.dev", "inference.x-k8s.io"]
+    resources: ["jobslorequirements"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+{{- end }}

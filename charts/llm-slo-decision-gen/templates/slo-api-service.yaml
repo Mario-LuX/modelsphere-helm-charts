@@ -1,0 +1,19 @@
+{{- if .Values.sloApi.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: slo-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-slo.labels" . | nindent 4 }}
+    app: slo-api
+spec:
+  type: ClusterIP
+  selector:
+    app: slo-api
+  ports:
+    - name: http
+      port: {{ .Values.sloApi.service.port }}
+      targetPort: {{ .Values.sloApi.service.targetPort }}
+      protocol: TCP
+{{- end }}

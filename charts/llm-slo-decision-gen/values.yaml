@@ -1,15 +1,8 @@
 # Default settings for the llm-slo-decision-gen chart.
-
-# Both services live in one namespace. This matches the prod layout where
-# LLMScaler.customProvider.serverAddress resolves as
-# http://decision-gen.<ns>.svc:80.
 #
-# Intentionally NOT Release.Namespace: Service DNS names (decision-gen,
-# decision-gen-unstable, slo-api) are fixed, and downstream charts / LLMScaler
-# objects hard-code llm-scaler in the FQDN. Installing with
-# `helm install -n other` still places workloads in values.namespace.
-# Changing this breaks existing consumers unless you also retarget them.
-namespace: llm-scaler
+# Install into the desired namespace with `helm install -n <ns>` /
+# `helm upgrade --install -n <ns>`. Workloads use {{ .Release.Namespace }}.
+# Service DNS is http://decision-gen.<Release.Namespace>.svc:80 (and siblings).
 
 # ---------------------------------------------------------------------------
 # decision-gen: emits per-service replica decisions on :8080/decisions.
@@ -100,7 +93,7 @@ sloApi:
   # If set, the chart writes this literal value into the Slo-Api Secret
   # under key "token". Leave empty to let the chart generate a random one.
   # Read the value after install with
-  #   kubectl get secret slo-api -n llm-scaler -o jsonpath='{.data.token}' | base64 -d
+  #   kubectl get secret slo-api -n <Release.Namespace> -o jsonpath='{.data.token}' | base64 -d
   token: ""
   probes:
     liveness:

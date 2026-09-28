@@ -1,7 +1,3 @@
-{{- define "llm-slo.namespace" -}}
-{{- .Values.namespace -}}
-{{- end -}}
-
 {{- define "llm-slo.labels" -}}
 app.kubernetes.io/name: {{ .Chart.Name }}
 app.kubernetes.io/instance: {{ .Release.Name }}
@@ -15,7 +11,7 @@ Cluster-scoped RBAC names. Bare "decision-gen" / "slo-api" collide when two
 releases of this chart are installed (even into different namespaces). Scope
 by Release.Name so each release owns its own ClusterRole/Binding. Namespaced
 workloads (Service, Deployment, ServiceAccount) stay on fixed names so the
-DNS contract decision-gen.<values.namespace>.svc remains stable.
+DNS contract decision-gen.<Release.Namespace>.svc remains stable.
 */}}
 {{- define "llm-slo.decisionGen.clusterRoleName" -}}
 {{- printf "%s-decision-gen" .Release.Name | trunc 63 | trimSuffix "-" -}}
