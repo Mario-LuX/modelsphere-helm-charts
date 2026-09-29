@@ -63,6 +63,26 @@ entries:
     version: 0.1.13
   bodylog-exporter:
   - apiVersion: v2
+    appVersion: 0.2.7
+    created: "2026-09-29T07:32:50.421996044Z"
+    description: Turns the body-log listener's detail records into Prometheus metrics,
+      and polls the router's control-plane endpoints for live routing state
+    digest: b1fe7ade4122aea97034812b40ca070b457e1cf7f67a0fcec5ecbc90b2cc1919
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - bodylog
+    - exporter
+    - prometheus
+    - observability
+    name: bodylog-exporter
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/modelsphere/llm-openresty
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/bodylog-exporter-0.3.1/bodylog-exporter-0.3.1.tgz
+    version: 0.3.1
+  - apiVersion: v2
     appVersion: 0.2.6
     created: "2026-09-25T03:28:19.313616553Z"
     description: Turns the body-log listener's detail records into Prometheus metrics,
@@ -749,4 +769,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-09-29T05:57:22.107601648Z"
+generated: "2026-09-29T07:32:50.422074899Z"
