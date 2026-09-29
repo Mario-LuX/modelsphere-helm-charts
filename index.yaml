@@ -163,6 +163,20 @@ entries:
   llm-slo-decision-gen:
   - apiVersion: v2
     appVersion: 0.1.0
+    created: "2026-09-29T02:49:02.696214563Z"
+    description: 'LLM and async-job SLO stack: decision-gen (recommendation service),
+      slo-api (SLO storage API), and the LLMSLORequirement and JobSLORequirement CRDs
+      that slo-api exposes.  LLMScaler CRD and the operator that reconciles it are
+      provided by a separate chart (llmscaleoperator / llmscaleoperator-system). Deploy
+      that one first if you need autoscaling, not just SLO storage. '
+    digest: d7b174172a0c161df0387547797605a8e29827e0c23e1a9726533ae447f9b306
+    name: llm-slo-decision-gen
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/llm-slo-decision-gen-0.3.0/llm-slo-decision-gen-0.3.0.tgz
+    version: 0.3.0
+  - apiVersion: v2
+    appVersion: 0.1.0
     created: "2026-09-25T03:28:19.538205584Z"
     description: 'LLM and async-job SLO stack: decision-gen (recommendation service),
       slo-api (SLO storage API), and the LLMSLORequirement and JobSLORequirement CRDs
@@ -702,4 +716,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-09-28T09:45:09.281668904Z"
+generated: "2026-09-29T02:49:02.696627968Z"
