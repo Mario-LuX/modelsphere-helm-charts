@@ -10,7 +10,7 @@ type: application
 # internal GitLab repo publishes -- so one pinned version resolves against
 # either repository. Not a rule for every chart here: cart carries a chart
 # version of its own, independent of the app it ships.
-version: 0.3.0
+version: 0.3.1
 # The exporter image tag: values.image.tag is empty by default and falls back to
 # this, so a release moves both together.
 #
@@ -18,5 +18,5 @@ version: 0.3.0
 # the version ChartMuseum serves, and the image the clusters run. "1.0.0" was a
 # placeholder that an internal pipeline rewrote from the tag at publish time, so
 # it named a release that never existed, and no such image was ever built.
-appVersion: "0.2.6"
+appVersion: "0.2.7"
 keywords: [bodylog, exporter, prometheus, observability]
