@@ -183,6 +183,25 @@ entries:
   llm-slo-decision-gen:
   - apiVersion: v2
     appVersion: 0.7.0
+    created: "2026-09-29T09:54:33.087809152Z"
+    description: 'LLM and async-job SLO stack: decision-gen (recommendation service),
+      optional slo-api (SLO storage HTTP/UI), and the LLMSLORequirement and JobSLORequirement
+      CRDs under inference.modelsphere.dev.  CRD ownership: this chart owns llmslorequirements.inference.modelsphere.dev
+      and jobslorequirements.inference.modelsphere.dev (see crds/). Both CRDs carry
+      helm.sh/resource-policy: keep so uninstall leaves them in the cluster — existing
+      LLMSLORequirement / JobSLORequirement objects are not deleted with the release.
+      Do not install a second chart that also ships these CRDs into the same cluster.  LLMScaler
+      CRD and the operator that reconciles it are provided by a separate chart (llmscaleoperator
+      / llmscaleoperator-system). Deploy that one first if you need autoscaling, not
+      just SLO storage. '
+    digest: 2b66094f216b2b0317e8d5e0a87e53e44e6734605f01231899b1e93f534ad65b
+    name: llm-slo-decision-gen
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/llm-slo-decision-gen-0.3.4/llm-slo-decision-gen-0.3.4.tgz
+    version: 0.3.4
+  - apiVersion: v2
+    appVersion: 0.7.0
     created: "2026-09-29T09:33:31.519950976Z"
     description: 'LLM and async-job SLO stack: decision-gen (recommendation service),
       optional slo-api (SLO storage HTTP/UI), and the LLMSLORequirement and JobSLORequirement
@@ -788,4 +807,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-09-29T09:33:31.520079759Z"
+generated: "2026-09-29T09:54:33.087896234Z"
