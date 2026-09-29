@@ -42,6 +42,45 @@
 {{- end -}}
 
 {{/*
+  The engine's own Service. Under lws.enabled it is <fullname>-leader, because
+  the LWS controller already owns a headless Service named <fullname> (the
+  group's DNS domain) and two Services cannot share a name.
+*/}}
+{{- define "vllm.serviceName" -}}
+{{- $name := include "vllm.fullname" . -}}
+{{- if .Values.lws.enabled -}}
+{{- $name = printf "%s-leader" $name -}}
+{{- end -}}
+{{- $name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/*
+  Everything the shutdown does has to fit inside terminationGracePeriodSeconds.
+  That timer starts when the pod is marked Terminating and covers BOTH the
+  preStop hook and vLLM finishing up after SIGTERM. If the total is too big the
+  kubelet kills the pod while requests are still running, so fail here rather
+  than ship a config that quietly drops them.
+
+  lifecycle.shutdownReserveSeconds is headroom after SIGTERM for vLLM's own exit
+  (and, under preStopKill, how long the hook waits after its own SIGTERM on top
+  of shutdownTimeout before killing PID 1's children).
+
+  Renders nothing -- it either fails the release or gets out of the way. Both
+  the Deployment and the LeaderWorkerSet call it, because both carry the same
+  preStop hook and the same grace period.
+*/}}
+{{- define "vllm.shutdownBudget" -}}
+{{- $preStop := .Values.lifecycle.preStop -}}
+{{- $budget := add (int .Values.lifecycle.shutdownTimeout) (int .Values.lifecycle.shutdownReserveSeconds) -}}
+{{- if $preStop.enabled -}}
+{{- $budget = add $budget (int $preStop.endpointSyncSeconds) (int $preStop.drainSeconds) -}}
+{{- end -}}
+{{- if gt (int $budget) (int .Values.terminationGracePeriodSeconds) -}}
+{{- fail (printf "vllm: terminationGracePeriodSeconds (%d) is smaller than the shutdown budget (%d = preStop endpointSyncSeconds %d + drainSeconds %d + lifecycle.shutdownTimeout %d + lifecycle.shutdownReserveSeconds %d); the pod would be SIGKILLed mid-drain" (int .Values.terminationGracePeriodSeconds) (int $budget) (int $preStop.endpointSyncSeconds) (int $preStop.drainSeconds) (int .Values.lifecycle.shutdownTimeout) (int .Values.lifecycle.shutdownReserveSeconds)) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
   The preStop hook's drain script.
 
   Stage 1a (endpointSyncSeconds) always waits: Kubernetes removes the pod from
@@ -63,16 +102,43 @@
   over nothing yields 0.0, which reads as "idle" and ends the drain immediately.
   inflight() reports None instead, so a renamed or unmounted metric makes the
   hook wait rather than silently skip.
+
+  The tail (`kill`) exists because of how LWS tears a group down. It deletes the leader FIRST, so the leader takes SIGTERM while its
+  workers are still running and still expecting it in the next collective. If
+  vLLM's shutdown then blocks inside cross-node NCCL, the pod burns the entire
+  terminationGracePeriodSeconds before the kubelet SIGKILLs it -- holding its
+  GPUs the whole time, which on a full cluster is exactly what the replacement
+  group is waiting for.
+
+  What the tail may NOT do is SIGKILL PID 1. A process inside a PID namespace
+  cannot kill that namespace's init: the kernel drops signals the init has no
+  handler for, and SIGKILL can never have one (man 7 pid_namespaces). kill(2)
+  still returns 0, so it reads as success while doing nothing.
+
+  What works is the pair below. SIGTERM to PID 1 IS delivered, because vLLM
+  installs a handler for it -- so the hook starts the real shutdown itself,
+  inside the grace period. Then it waits: if PID 1 exits, the kernel tears the
+  PID namespace down and takes this hook with it, so simply surviving that sleep
+  means vLLM is wedged. At that point its CHILDREN get SIGKILLed -- they carry no
+  such protection -- and their death lets PID 1 exit on its own.
+
+  Why the kill half exists at all: vLLM deleted mid-load misses SIGTERM (uvicorn has
+  not installed its handler yet), finishes booting, and then holds its GPUs until the
+  kubelet SIGKILLs it at terminationGracePeriodSeconds -- an hour, for these values.
+  Both roles hit that, which is why `kill` is not lws-only; the caller decides.
+
+  Call it as: include "vllm.preStopScript" (dict "root" $ "kill" false)
 */}}
 {{- define "vllm.preStopScript" -}}
-{{- $preStop := .Values.lifecycle.preStop -}}
+{{- $root := .root -}}
+{{- $preStop := $root.Values.lifecycle.preStop -}}
 {{- $poll := int ($preStop.pollIntervalSeconds | default 2) -}}
 {{- /* ~30s of consecutive unreadable metrics, whatever the poll interval. */ -}}
 {{- $streak := max 3 (div 30 $poll) -}}
 {{- $streakSecs := mul $streak $poll -}}
-import time, urllib.request, urllib.error
+import time, urllib.request, urllib.error{{ if .kill }}, os, signal{{ end }}
 
-METRICS = "http://127.0.0.1:{{ .Values.service.port }}/metrics"
+METRICS = "http://127.0.0.1:{{ $root.Values.service.port }}/metrics"
 # Gauges for what vLLM is serving right now and what it has queued.
 BUSY = ("vllm:num_requests_running", "vllm:num_requests_waiting")
 # Never send this at a proxy: a cluster that injects HTTP_PROXY into pods would
@@ -109,10 +175,10 @@ def inflight():
 
 # Keep serving while the cluster takes this pod out of rotation, so no new requests are sent here.
 time.sleep({{ $preStop.endpointSyncSeconds }})
-{{- if .Values.hangWatcher.enabled }}
+{{- if $root.Values.hangWatcher.enabled }}
 
 
-HEALTHZ = "http://127.0.0.1:{{ .Values.hangWatcher.port }}/healthz"
+HEALTHZ = "http://127.0.0.1:{{ $root.Values.hangWatcher.port }}/healthz"
 
 
 def hung():
@@ -130,7 +196,7 @@ def hung():
 deadline = time.monotonic() + {{ $preStop.drainSeconds }}
 unreadable = 0
 while time.monotonic() < deadline:
-    {{- if .Values.hangWatcher.enabled }}
+    {{- if $root.Values.hangWatcher.enabled }}
     # A hung engine's counters are frozen, not falling: they sit at whatever they were when it
     # wedged and never reach 0, so this loop would burn the full drainSeconds waiting for a
     # number that cannot move. The verdict costs nothing to be wrong about -- by the time
@@ -153,4 +219,28 @@ while time.monotonic() < deadline:
     time.sleep({{ $poll }})
 else:
     log("drain deadline reached after {{ $preStop.drainSeconds }}s, requests may still be in flight")
+{{- if .kill }}
+{{- $wait := add (int $root.Values.lifecycle.shutdownTimeout) (int $root.Values.lifecycle.shutdownReserveSeconds) }}
+
+# Drained (or out of time). Drive the shutdown from here rather than let the
+# kubelet's SIGTERM find vLLM blocked in a collective its workers will never
+# join. SIGTERM reaches PID 1 because vLLM installs a handler for it; SIGKILL
+# never would. See the comment above this script.
+log("SIGTERM -> PID 1")
+os.kill(1, signal.SIGTERM)
+
+# If PID 1 exits, the kernel tears down the PID namespace and this hook dies with
+# it -- so getting past this sleep means vLLM is stuck in its own shutdown.
+time.sleep({{ $wait }})
+
+log("still up after {{ $wait }}s -- killing PID 1's children")
+keep = (1, os.getpid(), os.getppid())
+for entry in os.listdir("/proc"):
+    if not entry.isdigit() or int(entry) in keep:
+        continue
+    try:
+        os.kill(int(entry), signal.SIGKILL)
+    except OSError:
+        pass
+{{- end }}
 {{- end -}}

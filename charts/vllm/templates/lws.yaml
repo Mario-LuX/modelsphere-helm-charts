@@ -1,0 +1,90 @@
+{{- if .Values.lws.enabled -}}
+{{/*
+  LeaderWorkerSet (leaderworkerset.x-k8s.io/v1) -- the multi-node workload, in
+  place of the Deployment. The startup and shutdown flows of a group, and which
+  value acts where, are documented under `lws` in values.yaml.
+
+  Both pod specs come from the same helper as the Deployment's (_pod.tpl), so
+  leader and worker cannot drift on image, model volume, resources or
+  scheduling -- a mismatch there does not fail at render time, it fails minutes
+  later as a NCCL timeout that reads like a network fault.
+*/}}
+{{- include "vllm.shutdownBudget" . }}
+{{- $lws := .Values.lws }}
+
+{{- if lt (int $lws.size) 2 }}
+{{- fail (printf "vllm: lws.size is %v -- a group of one is a single-node deployment with extra machinery (and vLLM would still be told --nnodes=1). Set lws.size >= 2, or turn lws.enabled off and use the Deployment, which is what replicaCount and the LLMScaler work with" $lws.size) }}
+{{- end }}
+
+{{- /* `role` is not a free label here: it is the whole difference between a pod
+       the Service routes to and one it does not. Overwriting it would either
+       empty the EndpointSlice (no backends) or put workers in it (traffic to a
+       port nothing is listening on). */}}
+{{- if hasKey (.Values.podLabels | default dict) "role" }}
+{{- fail "vllm: podLabels cannot set `role` under lws.enabled -- the chart uses role=leader/worker to tell the group apart, and the Service selects role: leader. Pick another key" }}
+{{- end }}
+
+{{- /* Not a style objection: a duplicate wins by being last on vLLM's command
+       line, so an extraArgs --node-rank would override the per-pod rank the
+       chart just derived and silently give every pod in the group the same one.
+       --headless is here too: on the leader it would take down the only API
+       server in the group. */}}
+{{- range $arg := .Values.extraArgs }}
+{{- range $derived := list "--nnodes" "--node-rank" "--master-addr" "--master-port" "--headless" "--distributed-executor-backend" }}
+{{- if hasPrefix $derived (toString $arg) }}
+{{- fail (printf "vllm: extraArgs carries %q, which lws.enabled already derives from the group (nnodes=lws.size, node-rank per pod, master-addr/port from the leader, --headless on workers, the mp executor). vLLM takes the LAST occurrence of a repeated flag, so this would override the per-pod value -- give every pod rank 0, say. Drop it; put only the parallelism layout (--tensor-parallel-size, --pipeline-parallel-size, ...) in extraArgs" $arg) }}
+{{- end }}
+{{- end }}
+{{- end }}
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: {{ include "vllm.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Release.Name }}-vllm
+spec:
+  {{- if not .Values.scaler.enabled }}
+  replicas: {{ $lws.replicas }}
+  {{- else }}
+  # replicas is deliberately ABSENT while the LLMScaler is enabled, for the same
+  # reason it is on the Deployment: the controller writes spec.replicas here (the
+  # LWS exposes /scale, and scaler.targetRef points at this object), which makes
+  # it the server-side-apply owner of that field. A chart that also declared it
+  # would fight for ownership on every `helm upgrade`.
+  #
+  # The starting GROUP count therefore comes from scaler.minReplicas on the first
+  # reconcile, not from lws.replicas -- and each of those groups is lws.size pods.
+  {{- end }}
+  startupPolicy: {{ $lws.startupPolicy }}
+  networkConfig:
+    subdomainPolicy: {{ $lws.subdomainPolicy }}
+  {{- with $lws.rolloutStrategy }}
+  rolloutStrategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  leaderWorkerTemplate:
+    size: {{ $lws.size }}
+    restartPolicy: {{ $lws.restartPolicy }}
+    leaderTemplate:
+      metadata:
+        labels:
+          app: {{ .Release.Name }}-vllm
+          # what the Service selects on -- workers run no API server
+          role: leader
+          {{- with .Values.podLabels }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
+      spec:
+        {{- include "vllm.podSpec" (dict "root" . "role" "leader") | nindent 8 }}
+    workerTemplate:
+      metadata:
+        labels:
+          app: {{ .Release.Name }}-vllm
+          role: worker
+          {{- with .Values.podLabels }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
+      spec:
+        {{- include "vllm.podSpec" (dict "root" . "role" "worker") | nindent 8 }}
+{{- end -}}

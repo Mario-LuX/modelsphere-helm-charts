@@ -24,7 +24,7 @@
   same things at render time and points at the values key to fix.
 */}}
 {{- $mr := .Values.modelRoute }}
-{{- $ownSvc := printf "%s/%s" .Release.Namespace (include "vllm.fullname" .) }}
+{{- $ownSvc := printf "%s/%s" .Release.Namespace (include "vllm.serviceName" .) }}
 
 {{- /* The LLMSLORequirement whose thresholds replace the static ttft_limit_ms /
        tps_limit_tps in nginx.values. Off leaves those in place. */}}

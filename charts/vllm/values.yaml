@@ -14,6 +14,8 @@
 # ClusterIP and an operator re-adopt but no pod restart.
 #
 # The metrics mock and the CART subchart keep their own names and ignore this.
+# Under lws.enabled the engine Service is <fullnameOverride>-leader, since the
+# LWS controller already owns a headless Service named after the LWS.
 fullnameOverride: ""
 
 # The id this service is known by OUTSIDE the cluster's object graph: the one
@@ -30,6 +32,75 @@ serviceId: ""
 # spec.replicas entirely so the operator can own it (see deployment.yaml), and
 # the starting count comes from scaler.minReplicas instead.
 replicaCount: 1
+
+# Multi-node: one model instance spread across several nodes, as a
+# LeaderWorkerSet (leaderworkerset.x-k8s.io/v1) instead of a Deployment. The
+# GROUP (lws.size pods: one leader + workers) is the unit that loads the model,
+# scales and restarts. Requires the LWS controller.
+#
+# vLLM's own multi-node mode, no Ray: the leader runs `vllm serve` with the API
+# server, every worker runs `vllm serve --headless` (GPU workers only), and the
+# multiprocessing executor spans the nodes. --nnodes, --node-rank,
+# --master-addr, --master-port, --distributed-executor-backend=mp and
+# --headless are derived from the group; the parallelism layout goes in
+# extraArgs, and must add up: tensor-parallel-size x pipeline-parallel-size =
+# lws.size x model.gpus (model.gpus is per POD).
+#
+# The rest of the chart carries over: the Service narrows to role: leader and is
+# renamed <fullname>-leader (the LWS controller owns a headless Service called
+# <fullname>), scaler.targetRef follows to the LWS where one replica is a whole
+# group, ModelRoute / CART / ServiceMonitor are unchanged.
+#
+# STARTUP of one group
+#   1. leader pod created                     [startupPolicy]
+#   2. worker pods created, in parallel
+#   3. every pod runs model-check             [modelCheck]
+#   4. workers block on the leader's port     [waitForLeader, distPort]
+#   5. ranks rendezvous, load weights, form the NCCL group
+#   6. leader binds service.port -> the group is serving
+#
+# SHUTDOWN of one group (scale-down, rolling update, or any member restarting
+# under RecreateGroupOnPodRestart). The two grace periods run in SERIES:
+#   1. leader pod deleted FIRST               [terminationGracePeriodSeconds]
+#      a. endpoint removed from the Service
+#      b. preStop drains until idle           [endpointSyncSeconds, drainSeconds]
+#         (gives up early if /metrics stays unreadable: nothing to drain)
+#      c. preStop SIGTERMs PID 1, waits, kills its children if it is stuck
+#                                             [leaderPreStopKill / preStopKill,
+#                                              shutdownTimeout + shutdownReserveSeconds]
+#      d. kubelet SIGKILL at the grace deadline -- backstop
+#   2. worker StatefulSet GC'd (its owner is the leader POD)
+#   3. worker pods                            [workerTerminationGracePeriodSeconds]
+#   4. replacement group starts -- same pod names, so only now
+#
+# Things that bite, none of them visible from the field names:
+#   - LeaderCreated promises the leader POD exists, not that anything is
+#     listening. LeaderReady would deadlock: the API port binds only once the
+#     workers have joined.
+#   - Workers carry no probes. READY 1/1 means "container running", not "model
+#     loaded" -- the group's real readiness is the leader's.
+#   - SIGKILL to PID 1 from inside its own PID namespace is silently dropped
+#     (kill(2) still returns 0). SIGTERM gets through because vLLM installs a
+#     handler, and PID 1's children are killable -- which is what (1c) uses.
+#   - A process wedged in the GPU driver (D state) ignores even the kubelet's
+#     SIGKILL: the pod sits in Terminating holding its GPUs until the node is
+#     dealt with. No chart setting reaches that.
+lws:
+  enabled: false
+  size: 2                                   # pods per group, leader included = --nnodes
+  replicas: 1                               # GROUPS, not pods; omitted when the scaler owns it
+  distPort: 29500                           # --master-port: rendezvous, pod-to-pod inside the group
+  startupPolicy: LeaderCreated
+  restartPolicy: RecreateGroupOnPodRestart
+  subdomainPolicy: Shared                   # Shared | UniquePerReplica
+  waitForLeader: true
+  workerTerminationGracePeriodSeconds: 60   # empty = same as the leader's
+  leaderPreStopKill: true
+  rolloutStrategy:
+    type: RollingUpdate
+    rollingUpdateConfiguration:
+      maxSurge: 1
+      maxUnavailable: 0
 
 image:
   repository: "vllm/vllm-openai"
@@ -79,6 +150,11 @@ modelCheck:
 # --tensor-parallel-size=2). The chart already emits --model,
 # --served-model-name, --host, --port and --shutdown-timeout, so do not repeat
 # those here.
+#
+# Under lws.enabled this is also where the parallelism layout goes
+# (--tensor-parallel-size / --pipeline-parallel-size); the flags the group
+# derives (--nnodes, --node-rank, --master-addr, --master-port, --headless,
+# --distributed-executor-backend) are rejected here.
 #
 # Rejected under commandOverride below, which leaves no command line to append to.
 extraArgs: []
@@ -269,6 +345,21 @@ lifecycle:
   # together with endpointSyncSeconds + drainSeconds; the chart checks that sum at
   # render time. Requires vLLM 0.18.0 or newer.
   shutdownTimeout: 0
+  # Stage 3: time reserved for vLLM's own exit after SIGTERM (and after
+  # shutdownTimeout, when set) -- headroom kept free in the grace period, and
+  # the chart checks it fits. Under preStopKill / lws.leaderPreStopKill it is
+  # also how long the hook waits, on top of shutdownTimeout, after its own
+  # SIGTERM before deciding vLLM is wedged and killing PID 1's children.
+  shutdownReserveSeconds: 20
+  # Whether the preStop hook ends by killing vLLM itself: SIGTERM to PID 1, then
+  # SIGKILL to its children after shutdownTimeout + shutdownReserveSeconds if it
+  # is still up. Needs no cooperation from the engine -- which is the point for a
+  # pod deleted mid-load, before vLLM has a SIGTERM handler to hear the kubelet.
+  #
+  # Applies to single-pod Deployments. The LWS path has its own switch,
+  # lws.leaderPreStopKill, because there the kill additionally has to break a
+  # collective whose workers are already gone.
+  preStopKill: true
 
 scaler:
   enabled: true
