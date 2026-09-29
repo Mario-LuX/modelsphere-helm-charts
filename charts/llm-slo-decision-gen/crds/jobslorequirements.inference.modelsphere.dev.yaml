@@ -44,7 +44,11 @@ spec:
                     - replica
                     type: string
                   value:
-                    minimum: 1
+                    description: >-
+                      Highest replica count the decision service may
+                      recommend. 0 (with minimumDeployment.value also 0)
+                      turns the service off.
+                    minimum: 0
                     type: integer
                 type: object
               minimumDeployment:
@@ -59,8 +63,12 @@ spec:
                     - concurrency
                     type: string
                   value:
+                    description: >-
+                      Lowest replica count the decision service may recommend.
+                      0 enables scale-to-zero: an idle service is scaled all the
+                      way down.
                     default: 1
-                    minimum: 1
+                    minimum: 0
                     type: integer
                 type: object
               priority:
@@ -101,6 +109,11 @@ spec:
             - queue
             - serviceId
             type: object
+            x-kubernetes-validations:
+            - rule: "!has(self.maximumDeployment) || self.minimumDeployment.value <= self.maximumDeployment.value"
+              message: minimumDeployment.value must be less than or equal to maximumDeployment.value
+            - rule: "!has(self.maximumDeployment) || self.minimumDeployment.value != 0 || self.maximumDeployment.value == 0"
+              message: maximumDeployment.value must be 0 when minimumDeployment.value is 0 (scale-to-zero is only for temporarily suspending the service)
         type: object
     served: true
     storage: true
