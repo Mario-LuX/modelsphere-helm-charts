@@ -1,0 +1,19 @@
+{{- if and .Values.decisionGen.enabled .Values.decisionGen.unstable.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: decision-gen-unstable
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-slo.labels" . | nindent 4 }}
+    app: decision-gen-unstable
+spec:
+  type: ClusterIP
+  selector:
+    app: decision-gen-unstable
+  ports:
+    - name: http
+      port: {{ .Values.decisionGen.service.port }}
+      targetPort: {{ .Values.decisionGen.service.targetPort }}
+      protocol: TCP
+{{- end }}

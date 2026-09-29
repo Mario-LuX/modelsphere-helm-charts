@@ -1,0 +1,59 @@
+{{- if .Values.decisionGen.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: decision-gen
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-slo.labels" . | nindent 4 }}
+    app: decision-gen
+spec:
+  replicas: {{ .Values.decisionGen.replicas }}
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: decision-gen
+  template:
+    metadata:
+      labels:
+        {{- include "llm-slo.labels" . | nindent 8 }}
+        app: decision-gen
+    spec:
+      serviceAccountName: decision-gen
+      containers:
+        - name: decision-gen
+          image: "{{ .Values.decisionGen.image.repository }}:{{ .Values.decisionGen.image.tag }}"
+          imagePullPolicy: {{ .Values.decisionGen.image.pullPolicy }}
+          ports:
+            - name: {{ .Values.decisionGen.container.name }}
+              containerPort: {{ .Values.decisionGen.container.port }}
+              protocol: TCP
+          {{- with .Values.decisionGen.env }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.decisionGen.probes.liveness.path }}
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: {{ .Values.decisionGen.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.decisionGen.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.decisionGen.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.decisionGen.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.decisionGen.probes.readiness.path }}
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: {{ .Values.decisionGen.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.decisionGen.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.decisionGen.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.decisionGen.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.decisionGen.resources | nindent 12 }}
+{{- end }}

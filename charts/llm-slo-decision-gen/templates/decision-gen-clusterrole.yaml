@@ -1,0 +1,40 @@
+{{- if .Values.decisionGen.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  # Release-scoped — see llm-slo.decisionGen.clusterRoleName. Upgrading from
+  # chart <0.3.0 replaces the bare "decision-gen" ClusterRole; Helm deletes
+  # the old one as part of the release. See NOTES.txt.
+  name: {{ include "llm-slo.decisionGen.clusterRoleName" . }}
+  labels:
+    {{- include "llm-slo.labels" . | nindent 4 }}
+    app: decision-gen
+rules:
+  # Aligned with operator/config/rbac/rbac.yaml — do not add rules here that
+  # decision_gen's code doesn't exercise. pod/service/endpoint/replicaset
+  # reads were removed after k8s_state gained placement-based lookups.
+  # Reads SLO definitions; never writes status.
+  # Both groups, for the same reason as slo-api's role below: the CRDs are
+  # moving from inference.x-k8s.io to inference.modelsphere.dev, clusters are
+  # on either side, and a role that names one leaves the workload unable to
+  # read the CRDs the cluster actually serves -- which reads as "no SLOs
+  # configured", not as an error.
+  - apiGroups: ["inference.modelsphere.dev", "inference.x-k8s.io"]
+    resources: ["llmslorequirements"]
+    verbs: ["get", "list", "watch"]
+  # Same for async-job SLOs.
+  - apiGroups: ["inference.modelsphere.dev", "inference.x-k8s.io"]
+    resources: ["jobslorequirements"]
+    verbs: ["get", "list", "watch"]
+  # pool_capacity() enumerates GPU nodes.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  # Scaling targets.
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["leaderworkerset.x-k8s.io"]
+    resources: ["leaderworkersets"]
+    verbs: ["get", "list", "watch"]
+{{- end }}

@@ -1,0 +1,19 @@
+{{- if .Values.decisionGen.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: decision-gen
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-slo.labels" . | nindent 4 }}
+    app: decision-gen
+spec:
+  type: ClusterIP
+  selector:
+    app: decision-gen
+  ports:
+    - name: http
+      port: {{ .Values.decisionGen.service.port }}
+      targetPort: {{ .Values.decisionGen.service.targetPort }}
+      protocol: TCP
+{{- end }}

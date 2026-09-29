@@ -2,12 +2,22 @@ apiVersion: v2
 name: llm-slo-decision-gen
 description: |
   LLM and async-job SLO stack: decision-gen (recommendation service),
-  slo-api (SLO storage API), and the LLMSLORequirement and
-  JobSLORequirement CRDs that slo-api exposes.
+  optional slo-api (SLO storage HTTP/UI), and the LLMSLORequirement and
+  JobSLORequirement CRDs under inference.modelsphere.dev.
+
+  CRD ownership: this chart owns
+  llmslorequirements.inference.modelsphere.dev and
+  jobslorequirements.inference.modelsphere.dev (see crds/). Both CRDs carry
+  helm.sh/resource-policy: keep so uninstall leaves them in the cluster —
+  existing LLMSLORequirement / JobSLORequirement objects are not deleted
+  with the release. Do not install a second chart that also ships these
+  CRDs into the same cluster.
 
   LLMScaler CRD and the operator that reconciles it are provided by a
   separate chart (llmscaleoperator / llmscaleoperator-system). Deploy
   that one first if you need autoscaling, not just SLO storage.
 type: application
-version: 0.3.1
-appVersion: "0.1.0"
+version: 0.3.2
+# Matches decisionGen.image.tag (4pdosc/llm-scaler-decision-gen:0.7.0), the
+# first release that reads LLMSLORequirement from inference.modelsphere.dev.
+appVersion: "0.7.0"
