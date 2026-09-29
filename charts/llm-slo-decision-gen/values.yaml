@@ -69,16 +69,16 @@ decisionGen:
         memory: 256Mi
 
 # ---------------------------------------------------------------------------
-# slo-api: optional HTTP/UI for editing LLMSLORequirement / JobSLORequirement
-# specs by route. Holds a token secret (auto-generated at install when token
-# is empty). Nothing else in the stack calls it. Off by default.
+# slo-api: HTTP/UI for editing LLMSLORequirement / JobSLORequirement specs by
+# route. Holds a token secret (auto-generated at install when token is empty).
+# Nothing else in the stack calls it.
 #
 # The image must be 0.2.0 or newer: v0.1 looks for LLMSLORequirement under
 # inference.x-k8s.io only, and would find nothing on a cluster that has
 # migrated. 0.2.0 asks the API server which group it serves.
 # ---------------------------------------------------------------------------
 sloApi:
-  enabled: false
+  enabled: true
   replicas: 1
   image:
     repository: 4pdosc/llm-slo-api
