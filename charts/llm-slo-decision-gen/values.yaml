@@ -74,8 +74,9 @@ sloApi:
   # Off by default: slo-api is an optional HTTP/UI front end for editing
   # LLMSLORequirement specs by route; nothing else in the stack calls it.
   # Set to true if you want it.
-  # Not usable with this chart yet: the published image (v0.1) still looks for
-  # LLMSLORequirement under the old API group, so it would find nothing.
+  # The image must be 0.2.0 or newer: v0.1 looks for LLMSLORequirement under
+  # inference.x-k8s.io only, and would find nothing on a cluster that has
+  # migrated. 0.2.0 asks the API server which group it serves.
   enabled: false
   replicas: 1
   image:

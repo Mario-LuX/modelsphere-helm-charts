@@ -19,11 +19,16 @@ rules:
   # decision_gen's code doesn't exercise. pod/service/endpoint/replicaset
   # reads were removed after k8s_state gained placement-based lookups.
   # Reads SLO definitions; never writes status.
-  - apiGroups: ["inference.modelsphere.dev"]
+  # Both groups, for the same reason as slo-api's role below: the CRDs are
+  # moving from inference.x-k8s.io to inference.modelsphere.dev, clusters are
+  # on either side, and a role that names one leaves the workload unable to
+  # read the CRDs the cluster actually serves -- which reads as "no SLOs
+  # configured", not as an error.
+  - apiGroups: ["inference.modelsphere.dev", "inference.x-k8s.io"]
     resources: ["llmslorequirements"]
     verbs: ["get", "list", "watch"]
   # Same for async-job SLOs.
-  - apiGroups: ["inference.modelsphere.dev"]
+  - apiGroups: ["inference.modelsphere.dev", "inference.x-k8s.io"]
     resources: ["jobslorequirements"]
     verbs: ["get", "list", "watch"]
   # pool_capacity() enumerates GPU nodes.
