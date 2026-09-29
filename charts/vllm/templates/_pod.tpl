@@ -18,12 +18,10 @@
 
   What the role actually decides:
 
-    - the engine command form. `single` keeps the exec form it has always had
-      (python3 -m vllm.entrypoints.openai.api_server, no shell). Multi-node pods
-      run `vllm serve` under a shell, for three reasons:
-        * --headless is handled by the `vllm serve` CLI only; the api_server
-          module has no headless mode and would start an API server on every
-          worker.
+    - the engine command form. Every role runs `vllm serve` (the image's own
+      entrypoint, and the only CLI that handles --headless). `single` keeps the
+      exec form (no shell). Multi-node pods need a shell, for two reasons that
+      both matter:
         * --node-rank has to come from ${LWS_WORKER_INDEX} at runtime.
         * the rdma-injector webhook only prepends its
           `source /etc/gpu-node/nccl-ib.env` (the per-node NCCL_IB_HCA pipeline)
@@ -234,7 +232,7 @@ containers:
       exec vllm serve{{ range $flags }} \
         {{ if contains "$" . }}{{ . }}{{ else }}{{ squote . }}{{ end }}{{ end }}
   {{- else }}
-  command: ["python3", "-m", "vllm.entrypoints.openai.api_server"]
+  command: ["vllm", "serve"]
   args:
     {{- range $flags }}
     - {{ . | quote }}
