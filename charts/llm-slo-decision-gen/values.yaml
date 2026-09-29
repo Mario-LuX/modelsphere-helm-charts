@@ -81,7 +81,7 @@ sloApi:
   replicas: 1
   image:
     repository: 4pdosc/llm-slo-api
-    tag: "v0.1"
+    tag: "0.2.0"
     pullPolicy: IfNotPresent
   service:
     port: 80

@@ -9,5 +9,5 @@ description: |
   separate chart (llmscaleoperator / llmscaleoperator-system). Deploy
   that one first if you need autoscaling, not just SLO storage.
 type: application
-version: 0.3.0
+version: 0.3.1
 appVersion: "0.1.0"
