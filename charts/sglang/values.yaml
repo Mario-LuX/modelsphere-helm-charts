@@ -728,7 +728,7 @@ volumeMounts: []
 # Do not set nvidia.com/gpu here -- model.gpus renders it, and the chart refuses
 # a second spelling rather than let the two drift. Other extended resources do
 # belong here, e.g. an RDMA device from the shared-device plugin -- though for
-# RDMA as a whole, rdma.enabled below (on by default, lws.enabled pods only)
+# RDMA as a whole, rdma.enabled below (lws.enabled pods only)
 # sets this, IPC_LOCK and the injector label together:
 #
 #   limits: { rdma/hca_shared: "1" }
@@ -752,7 +752,7 @@ resources: {}
 #     capabilities:
 #       add: ["IPC_LOCK"]
 #
-# rdma.enabled below (on by default) adds it to lws.enabled pods.
+# rdma.enabled below adds it to lws.enabled pods.
 securityContext: {}
 
 # Extra labels on the pods (not on the Deployment/LWS object, and never on the
@@ -765,7 +765,7 @@ securityContext: {}
 #   podLabels:
 #     rdma-ib: "true"
 #
-# (rdma.enabled below, on by default, adds that label to lws.enabled pods,
+# (rdma.enabled below adds that label to lws.enabled pods,
 # along with the RDMA resource and IPC_LOCK it needs to be any use)
 # and injects the per-node RDMA environment -- the /etc/gpu-node hostPath plus a
 # `source` of nccl-ib.env, which resolves NCCL_IB_HCA to the HCAs that are
@@ -790,21 +790,21 @@ podLabels: {}
 #     shared-device plugin
 #   - capability IPC_LOCK -> the driver can pin its buffers
 #
-# On by default, and it only acts on lws.enabled pods: a single-node pod has no
-# fabric between GPUs, so it gets none of the three whatever this says.
+# It only acts on lws.enabled pods: a single-node pod has no fabric between
+# GPUs, so it gets none of the three whatever this says.
 #
-# Turn it off where the cluster cannot honour it: with no shared-device plugin
-# advertising rdma/hca_shared the group stays Pending forever (on another
-# plugin's resource name, set the three by hand under podLabels, resources and
-# securityContext instead); IPC_LOCK is refused in a namespace enforcing Pod
-# Security "baseline" or stricter; and the label gets a pod rejected if
-# rdma-injector was removed but its webhook configuration left behind
-# (failurePolicy: Fail).
+# Off by default because each of the three assumes something about the cluster:
+# with no shared-device plugin advertising rdma/hca_shared the group stays
+# Pending forever (on another plugin's resource name, set the three by hand
+# under podLabels, resources and securityContext instead); IPC_LOCK is refused
+# in a namespace enforcing Pod Security "baseline" or stricter; and the label
+# gets a pod rejected if rdma-injector was removed but its webhook
+# configuration left behind (failurePolicy: Fail).
 #
 # Anything already written under podLabels, resources or securityContext for
 # the same key is kept as written.
 rdma:
-  enabled: true
+  enabled: false
 
 # A PodDisruptionBudget over the engine pods, so a node drain or a
 # cluster-autoscaler scale-down cannot take this model out all at once. The CART
