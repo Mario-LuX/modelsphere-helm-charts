@@ -41,6 +41,15 @@
 */}}
 {{- define "vllm.podSpec" -}}
 {{- $root := .root }}
+{{- /* /dev/shm: the chart mounts one unless the values already do. A user who
+       mounts /dev/shm through volumeMounts keeps ownership of it -- emitting
+       the chart's as well would put two mounts on the same path and the pod
+       spec would be rejected. */}}
+{{- $userShm := false }}
+{{- range $root.Values.volumeMounts }}
+{{- if eq (.mountPath | default "") "/dev/shm" }}{{ $userShm = true }}{{ end }}
+{{- end }}
+{{- $shmOn := and $root.Values.shm.enabled (not $userShm) }}
 {{- $role := .role }}
 {{- $lws := $root.Values.lws }}
 {{- $multi := ne $role "single" }}
@@ -275,12 +284,16 @@ containers:
   securityContext:
     {{- toYaml . | nindent 4 }}
   {{- end }}
-  {{- if or $hasModel $root.Values.volumeMounts }}
+  {{- if or $hasModel $root.Values.volumeMounts $shmOn }}
   volumeMounts:
   {{- if $hasModel }}
   - name: model-storage
     mountPath: {{ $root.Values.model.mountPath }}
     readOnly: true
+  {{- end }}
+  {{- if $shmOn }}
+  - name: dshm
+    mountPath: /dev/shm
   {{- end }}
   {{- with $root.Values.volumeMounts }}
   {{- toYaml . | nindent 2 }}
@@ -419,8 +432,14 @@ containers:
   {{- end }}
 {{- end }}
 {{- $hangVol := and $root.Values.hangWatcher.enabled $serves }}
-{{- if or $hasModel $hangVol $root.Values.volumes }}
+{{- if or $hasModel $hangVol $root.Values.volumes $shmOn }}
 volumes:
+{{- if $shmOn }}
+- name: dshm
+  emptyDir:
+    medium: Memory
+    sizeLimit: {{ $root.Values.shm.sizeLimit }}
+{{- end }}
 {{- if $hasModel }}
 - name: model-storage
   hostPath:
@@ -435,6 +454,12 @@ volumes:
 {{- with $root.Values.volumes }}
 {{- toYaml . | nindent 0 }}
 {{- end }}
+{{- end }}
+{{- if $root.Values.hostNetwork }}
+hostNetwork: true
+{{- end }}
+{{- with (ternary "ClusterFirstWithHostNet" $root.Values.dnsPolicy (and $root.Values.hostNetwork (not $root.Values.dnsPolicy))) }}
+dnsPolicy: {{ . }}
 {{- end }}
 {{- with $root.Values.schedulerName }}
 schedulerName: {{ . }}
