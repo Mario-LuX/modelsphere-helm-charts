@@ -59,6 +59,7 @@ data:
       "poll_interval_sec": {{ $c.pollIntervalSec | default 15 }},
       "stall_sec": {{ $c.stallSec | default 60 }},
       "metrics_timeout_sec": {{ $c.metricsTimeoutSec | default 10 }},
+      "warmup_sec": {{ $c.warmupSec | default 600 }},
       "active_probe_enabled": {{ $c.activeProbeEnabled | default false }},
       "active_probe_path": {{ $c.activeProbePath | default "/health_generate" | quote }},
       "active_probe_method": {{ $c.activeProbeMethod | default "GET" | quote }},

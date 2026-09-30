@@ -187,6 +187,7 @@
             "pollIntervalSec": { "type": "integer", "minimum": 1 },
             "stallSec": { "type": "integer", "minimum": 1 },
             "metricsTimeoutSec": { "type": "integer", "minimum": 1 },
+            "warmupSec": { "type": "integer", "minimum": 1 },
             "activeProbeEnabled": { "type": "boolean" },
             "activeProbePath": { "type": "string" },
             "activeProbeMethod": { "type": "string" },
