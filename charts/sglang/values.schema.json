@@ -419,6 +419,19 @@
       }
     },
 
+    "shm": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "sizeLimit": { "type": ["string", "integer"] }
+      }
+    },
+
+    "hostNetwork": { "type": "boolean" },
+
+    "dnsPolicy": { "type": "string" },
+
     "podDisruptionBudget": {
       "type": "object",
       "additionalProperties": false,

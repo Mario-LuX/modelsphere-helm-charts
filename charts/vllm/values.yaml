@@ -731,6 +731,52 @@ env: []
   #       name: huggingface
   #       key: token
 
+# /dev/shm for the engine. Kubernetes gives a container 64 MiB of it, which is
+# below what the engines need for their shared-memory IPC once there is more
+# than one worker process: vLLM's multiproc executor asks for 160 MiB and exits
+# at startup with "Insufficient space in /dev/shm", and under
+# lws.restartPolicy: RecreateGroupOnPodRestart that failure takes the whole
+# group down and recreates it, so the visible symptom is a group that churns
+# every couple of minutes rather than an obvious error.
+#
+# On by default because every multi-process configuration needs it and nothing
+# else supplies it -- a docker run gets away with --ipc=host, which has no
+# Kubernetes equivalent. sizeLimit is a CEILING, not an allocation: medium:
+# Memory is tmpfs, so pages are backed only as they are touched.
+#
+# Set enabled: false if you mount /dev/shm yourself through volumes/volumeMounts
+# below; the chart also detects that case and steps aside on its own.
+shm:
+  enabled: true
+  sizeLimit: 8Gi
+
+# Put the engine pods in the HOST network namespace.
+#
+# Needed on a RoCE fabric. RoCE GIDs are derived from the IP addresses of the
+# netdevs carrying the fabric, and the kernel exposes a GID only in the network
+# namespace its netdev lives in -- so from an ordinary pod the whole GID table
+# reads back as zeros and ibv_modify_qp fails INIT->RTR with errno 19 ENODEV,
+# whatever NCCL_IB_GID_INDEX says. InfiniBand does not have this problem (its
+# GIDs come from the subnet manager, not from a netdev), which is why a cluster
+# on IB needs none of this.
+#
+# Off by default: it is a real reduction in isolation (the pod shares the host's
+# ports and interfaces), and it is only one of the ways to give a pod usable
+# RoCE -- an SR-IOV VF or a macvlan interface on the fabric subnet achieves the
+# same thing while keeping the pod on the CNI network.
+#
+# With model.gpus covering a whole node there is one engine pod per node, so
+# service.port does not collide. Check that before enabling it for a layout that
+# packs several engine pods onto one node.
+hostNetwork: false
+
+# dnsPolicy for the engine pods. Empty means the Kubernetes default
+# (ClusterFirst), except under hostNetwork: true, where the chart uses
+# ClusterFirstWithHostNet -- without which a host-network pod resolves through
+# the node's resolver and cannot look up the cluster Services it needs, the LWS
+# leader's own hostname among them.
+dnsPolicy: ""
+
 # Additional volumes on the output Deployment definition. The model volume built
 # from model.localPath is always mounted; these are added alongside it.
 #
