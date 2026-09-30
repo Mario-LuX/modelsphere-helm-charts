@@ -447,6 +447,25 @@ entries:
   sglang:
   - apiVersion: v2
     appVersion: 1.0.0
+    created: "2026-09-30T15:22:26.797590571Z"
+    dependencies:
+    - condition: cart.enabled
+      name: cart
+      repository: file://../cart
+      version: 0.2.2
+    description: SGLang inference deployment -- single-node or multi-node (LeaderWorkerSet),
+      with optional cache-aware routing, autoscaling and hang detection
+    digest: 770c20ab40e5d57a002ec8b72d2bba1e8d8796de659a28cbf16f1f3c61e6dcdd
+    home: https://github.com/modelsphere/helm-charts
+    name: sglang
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/sglang-0.8.6/sglang-0.8.6.tgz
+    version: 0.8.6
+  - apiVersion: v2
+    appVersion: 1.0.0
     created: "2026-09-30T09:33:50.544362312Z"
     dependencies:
     - condition: cart.enabled
@@ -695,6 +714,25 @@ entries:
   vllm:
   - apiVersion: v2
     appVersion: 1.0.0
+    created: "2026-09-30T15:22:27.103789021Z"
+    dependencies:
+    - condition: cart.enabled
+      name: cart
+      repository: file://../cart
+      version: 0.2.2
+    description: vLLM inference deployment -- single-node or multi-node (LeaderWorkerSet),
+      with optional cache-aware routing, autoscaling and hang detection
+    digest: eff09546e3bf22f7692c9a329fb61da870037ea3d790ca82cc598617e60d6813
+    home: https://github.com/modelsphere/helm-charts
+    name: vllm
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.7.3/vllm-0.7.3.tgz
+    version: 0.7.3
+  - apiVersion: v2
+    appVersion: 1.0.0
     created: "2026-09-30T09:33:50.808204168Z"
     dependencies:
     - condition: cart.enabled
@@ -921,4 +959,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-09-30T09:33:50.808288586Z"
+generated: "2026-09-30T15:22:27.104014443Z"
