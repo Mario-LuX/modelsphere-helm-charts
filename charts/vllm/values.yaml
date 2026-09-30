@@ -771,16 +771,17 @@ resources: {}
 #     capabilities:
 #       add: ["IPC_LOCK"]
 #
-# rdma.enabled below adds it for you.
+# rdma.enabled below (on by default) adds it to lws.enabled pods.
 securityContext: {}
 
 # Extra labels on the pods -- not on the Deployment object, and never on its
 # selector, which is immutable. The place for anything an admission webhook keys
-# off, e.g. rdma-injector's `rdma-ib: "true"` -- which rdma.enabled below adds,
-# together with the RDMA resource and IPC_LOCK it needs to be any use.
+# off, e.g. rdma-injector's `rdma-ib: "true"` -- which rdma.enabled below (on by
+# default) adds to lws.enabled pods, together with the RDMA resource and
+# IPC_LOCK it needs to be any use.
 podLabels: {}
 
-# RDMA for multi-node (lws.enabled) on an InfiniBand fabric, as one switch. On
+# RDMA for multi-node (lws.enabled) on an InfiniBand fabric, as one switch. It
 # sets the three things an RDMA pod needs together, so none of them is left out:
 #
 #   - pod label rdma-ib: "true"  -> rdma-injector (charts/rdma-injector) sources
@@ -789,23 +790,21 @@ podLabels: {}
 #     shared-device plugin
 #   - capability IPC_LOCK -> the driver can pin its buffers
 #
-# Off by default because each of them assumes something about the cluster: the
-# resource makes the pod Pending forever where no plugin advertises it, IPC_LOCK
-# is refused in a
-# namespace enforcing Pod Security "baseline" or stricter, and the label gets a
-# pod rejected if rdma-injector was removed but its webhook configuration left
-# behind (failurePolicy: Fail).
+# On by default, and it only acts on lws.enabled pods: a single-node pod has no
+# fabric between GPUs, so it gets none of the three whatever this says.
+#
+# Turn it off where the cluster cannot honour it: with no shared-device plugin
+# advertising rdma/hca_shared the group stays Pending forever (on another
+# plugin's resource name, set the three by hand under podLabels, resources and
+# securityContext instead); IPC_LOCK is refused in a namespace enforcing Pod
+# Security "baseline" or stricter; and the label gets a pod rejected if
+# rdma-injector was removed but its webhook configuration left behind
+# (failurePolicy: Fail).
 #
 # Anything already written under podLabels, resources or securityContext for
-# the same key is kept as written. Applies to every engine pod; outside
-# lws.enabled nothing crosses nodes, so it buys nothing there.
-#
-# The resource name is fixed to rdma/hca_shared, what our shared-device plugin
-# is configured to advertise. On a cluster whose plugin uses another name, leave
-# this off and set the three by hand under podLabels, resources and
-# securityContext.
+# the same key is kept as written.
 rdma:
-  enabled: false
+  enabled: true
 
 # A PodDisruptionBudget over the engine pods, so a node drain or a
 # cluster-autoscaler scale-down cannot take this model out all at once. The CART

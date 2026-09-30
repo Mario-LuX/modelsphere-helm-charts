@@ -263,7 +263,7 @@ containers:
          RDMA driver can pin its buffers (and the lws command form's
          `ulimit -l unlimited` actually takes). Added once, never duplicated. */}}
   {{- $sc := deepCopy ($root.Values.securityContext | default dict) }}
-  {{- if $root.Values.rdma.enabled }}
+  {{- if and $root.Values.rdma.enabled $multi }}
   {{- $caps := $sc.capabilities | default dict }}
   {{- $add := $caps.add | default list }}
   {{- if not (has "IPC_LOCK" $add) }}
@@ -314,7 +314,7 @@ containers:
          count stands. A null there counts as not asking: it is what a values
          overlay leaves behind when it removes a hand-written entry, and the
          point of such an overlay is to hand the job to this switch. */}}
-  {{- if $root.Values.rdma.enabled }}
+  {{- if and $root.Values.rdma.enabled $multi }}
   {{- if kindIs "invalid" (index (index $res "limits" | default dict) "rdma/hca_shared") }}
   {{- $res = mergeOverwrite (deepCopy $res) (dict "limits" (dict "rdma/hca_shared" "1")) }}
   {{- end }}
