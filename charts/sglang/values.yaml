@@ -241,14 +241,24 @@ hangWatcher:
     # /metrics scrape every 5s costs nothing.
     pollIntervalSec: 5
     # How long token_progress may freeze before the sidecar starts asking questions.
-    # 180 -> 30, and ONLY safe together with sidecar >= 0.1.18: it counts per-iteration
-    # counters (realtime_tokens_total, cuda_graph_passes_total), whereas the older
-    # finish-only ones froze for a whole long request and got such a pod killed.
-    # With the active probe behind it this is "when to start asking", not "when to
-    # declare dead". Headroom: one chunked-prefill forward is 1-3s. Raise it if your
-    # deployment has stop-the-world operations (weight hot-reload).
-    stallSec: 30
-    metricsTimeoutSec: 10
+    # This is "when to start asking", not "when to declare dead": the active probe
+    # behind it must fail repeatedly across the whole window before anything is
+    # restarted. Requires sidecar >= 0.1.18, which counts per-iteration counters
+    # (realtime_tokens_total, cuda_graph_passes_total); the older finish-only ones
+    # froze for the length of a whole request and got healthy pods killed.
+    #
+    # 30 -> 60. A restart costs a full model load, so the asymmetry favours waiting.
+    # 30s left little room above a long chunked prefill. Raise it further if your
+    # deployment has stop-the-world operations such as a weight hot-reload.
+    stallSec: 60
+    # Timeout for a single /metrics scrape. 10 -> 20, so a slow answer is not read
+    # as an unreachable engine.
+    #
+    # Deliberately larger than pollIntervalSec: a scrape that really takes this long
+    # occupies several poll cycles. That is the intended trade -- the unreachable
+    # path declares a hang after stall_sec of silence, and a merely slow engine
+    # should not be pushed down it by a tight timeout.
+    metricsTimeoutSec: 20
     # Grace period after the engine first becomes ready: hang verdicts are logged
     # but NOT acted on for this long. Restarting costs a full model load (~27min
     # for kimi-k3), so the first minutes -- cuda graph capture, the first long

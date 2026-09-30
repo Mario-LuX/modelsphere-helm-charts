@@ -252,8 +252,13 @@ hangWatcher:
     # sidecar's vllm:kv_cache_usage_perc signal (see image.tag). Running an older
     # sidecar with very long contexts and low concurrency, raise this until it
     # covers the longest single prefill.
-    stallSec: 30
-    metricsTimeoutSec: 10
+    # 30 -> 60: a restart costs a full model load, so the asymmetry favours waiting.
+    stallSec: 60
+    # Timeout for a single /metrics scrape. 10 -> 20 so a slow answer is not read as
+    # an unreachable engine. Deliberately larger than pollIntervalSec -- a scrape
+    # that really takes this long occupies several poll cycles, which is preferable
+    # to pushing a merely slow engine onto the unreachable path.
+    metricsTimeoutSec: 20
     # Grace period after the engine first becomes ready: hang verdicts are logged
     # but NOT acted on for this long. Restarting costs a full model load (~27min
     # for kimi-k3), so the first minutes -- cuda graph capture, the first long
