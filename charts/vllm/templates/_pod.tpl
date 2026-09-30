@@ -311,9 +311,11 @@ containers:
   {{- end }}
   {{- /* rdma.enabled adds one RDMA device from the shared-device plugin
          (rdma/hca_shared), unless resources already asks for it -- the user's
-         count stands. */}}
+         count stands. A null there counts as not asking: it is what a values
+         overlay leaves behind when it removes a hand-written entry, and the
+         point of such an overlay is to hand the job to this switch. */}}
   {{- if $root.Values.rdma.enabled }}
-  {{- if not (hasKey (index $res "limits" | default dict) "rdma/hca_shared") }}
+  {{- if kindIs "invalid" (index (index $res "limits" | default dict) "rdma/hca_shared") }}
   {{- $res = mergeOverwrite (deepCopy $res) (dict "limits" (dict "rdma/hca_shared" "1")) }}
   {{- end }}
   {{- end }}
