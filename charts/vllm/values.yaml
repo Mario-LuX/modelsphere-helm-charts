@@ -651,6 +651,13 @@ modelRoute:
       # Set it to "false" for any route whose callers should not see your
       # topology -- anything reachable from outside the cluster, in particular.
       expose_routed_peer: "true"
+      # TTFT hard 429: when the pool's TTFT p80 crosses its threshold, openresty
+      # rejects new requests outright. Off by default here: a slow prefill spike
+      # then turns into a burst of 429s for callers, while the soft control that
+      # stays on (TTFT measurement plus shrinking the concurrency ceiling) already
+      # sheds load without failing requests. Set it to "true" for a route that
+      # would rather fail fast than queue.
+      ttft_429_default_enabled: "false"
       # Setting tps_limit_tps opts into adaptive concurrency (AIMD): when the
       # decode rate falls below this, the concurrency ceiling shrinks.
       # tps_limit_tps: "30"
