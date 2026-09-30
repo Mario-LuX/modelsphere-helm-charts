@@ -228,7 +228,11 @@ hangWatcher:
     # moment stallSec expires -- lets a single slow probe kill a healthy engine.
     # 0.1.22 probes on every stalled poll and needs consecutive failures spanning
     # stallSec, with the verdict still landing at stallSec.
-    tag: "0.1.22"
+    # >= 0.1.26 is required by warmupSec below. An older sidecar ignores the key
+    # silently (unknown JSON fields are dropped), so the grace period would look
+    # configured and do nothing -- pin the tag rather than rely on the cluster
+    # happening to run a new enough image.
+    tag: "0.1.26"
   port: 9090                 # /healthz port (just needs to differ from service.port)
   # Thresholds -> ConfigMap the sidecar hot-reloads (helm upgrade retunes, no pod restart).
   config:
@@ -245,6 +249,15 @@ hangWatcher:
     # deployment has stop-the-world operations (weight hot-reload).
     stallSec: 30
     metricsTimeoutSec: 10
+    # Grace period after the engine first becomes ready: hang verdicts are logged
+    # but NOT acted on for this long. Restarting costs a full model load (~27min
+    # for kimi-k3), so the first minutes -- cuda graph capture, the first long
+    # prefills, the KV pool filling out -- must not be mistaken for a hang.
+    # Measured 2026-09-30 on kimi-k3: first /metrics at 12:40:38, killed by the
+    # log fast path at 12:44:18 -- 3m40s of life for 27min of reload.
+    # Re-armed when the engine restarts (token counters go backwards).
+    # Set 1 to effectively disable. Needs hang-watcher >= 0.1.26.
+    warmupSec: 600
     # Once token_progress has frozen past stallSec, probe the engine: 2xx = alive,
     # timeout/5xx = confirmed hang. On by default because the passive path cannot tell
     # "genuinely idle" from "scheduler wedged" -- running is 0 in both.
