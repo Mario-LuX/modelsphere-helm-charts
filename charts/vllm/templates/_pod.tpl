@@ -67,6 +67,9 @@
   extraArgs stays last so it can override anything above it -- vLLM's argparse
   takes the last occurrence of a repeated flag.
 */}}
+{{- /* The flags the chart itself derives from the LWS environment at runtime --
+       the only ones the multi-node shell may expand. */}}
+{{- $expand := list }}
 {{- $flags := list
       (printf "--model=%s" $root.Values.model.mountPath)
       (printf "--served-model-name=%s" $root.Values.model.name)
@@ -109,7 +112,9 @@
 {{- $flags = append $flags "--distributed-executor-backend=mp" }}
 {{- $flags = append $flags (printf "--nnodes=%v" $lws.size) }}
 {{- $flags = append $flags (printf "--node-rank=%s" (ternary "${LWS_WORKER_INDEX}" "0" $worker)) }}
+{{- $expand = append $expand (last $flags) }}
 {{- $flags = append $flags "--master-addr=${LWS_LEADER_ADDRESS}" }}
+{{- $expand = append $expand (last $flags) }}
 {{- $flags = append $flags (printf "--master-port=%v" $lws.distPort) }}
 {{- if $worker }}
 {{- $flags = append $flags "--headless" }}
@@ -126,8 +131,11 @@
        and their whole group is being deleted with them -- a long grace only
        holds GPUs until the kubelet's SIGKILL. */}}
 {{- $grace := $root.Values.terminationGracePeriodSeconds }}
-{{- if and $worker $lws.workerTerminationGracePeriodSeconds }}
-{{- $grace = $lws.workerTerminationGracePeriodSeconds }}
+{{- /* 0 is a real value (SIGKILL at once -- a worker drains nothing); only
+       empty or null means "same as the leader's". */}}
+{{- $wg := $lws.workerTerminationGracePeriodSeconds }}
+{{- if and $worker (not (kindIs "invalid" $wg)) (ne (toString $wg) "") }}
+{{- $grace = $wg }}
 {{- end -}}
 # Total time allowed to shut down. The preStop hook AND vLLM finishing up after SIGTERM both come out of this, or the pod gets killed.
 # Checked at render time by vllm.shutdownBudget.
@@ -222,15 +230,19 @@ containers:
   # IB fabric. Guarded, because a container without CAP_IPC_LOCK cannot raise it
   # and that is not a reason to refuse to start.
   #
-  # Flags carrying a ${...} are left unquoted so the shell expands them; the rest
-  # are single-quoted, so a value with a space in it (a JSON
-  # --compilation-config, say) survives the trip through bash.
+  # Every flag reaches the engine exactly as written. The ones the chart derives
+  # from the LWS environment (the rank and the leader's address) are
+  # double-quoted so bash expands their ${...}; everything else -- extraArgs
+  # included -- is single-quoted with any ' inside escaped, so spaces, quotes,
+  # $ and JSON survive the trip through bash untouched, the same as in the
+  # single-pod exec form. To reference the container's env from extraArgs, use
+  # Kubernetes' $(VAR) syntax: the kubelet expands it in either form.
   command: ["bash", "-lc"]
   args:
     - |
       ulimit -l unlimited 2>/dev/null || true
       exec vllm serve{{ range $flags }} \
-        {{ if contains "$" . }}{{ . }}{{ else }}{{ squote . }}{{ end }}{{ end }}
+        {{ if has . $expand }}"{{ . }}"{{ else }}'{{ replace "'" "'\\''" . }}'{{ end }}{{ end }}
   {{- else }}
   command: ["vllm", "serve"]
   args:

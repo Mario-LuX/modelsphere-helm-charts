@@ -69,8 +69,12 @@
         "subdomainPolicy": { "type": "string", "enum": ["Shared", "UniquePerReplica"] },
         "waitForLeader": { "type": "boolean" },
         "workerTerminationGracePeriodSeconds": {
-          "description": "Empty means \"same as the leader's\".",
-          "type": ["integer", "string", "null"]
+          "description": "Empty or null means \"same as the leader's\"; 0 is a real value (no grace).",
+          "oneOf": [
+            { "type": "integer", "minimum": 0 },
+            { "type": "string", "pattern": "^[0-9]*$" },
+            { "type": "null" }
+          ]
         },
         "leaderPreStopKill": { "type": "boolean" },
         "rolloutStrategy": {

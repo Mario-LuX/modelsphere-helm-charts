@@ -72,7 +72,7 @@ lws:
   restartPolicy: RecreateGroupOnPodRestart
   subdomainPolicy: Shared                   # Shared | UniquePerReplica
   waitForLeader: true
-  workerTerminationGracePeriodSeconds: 60   # empty = same as the leader's
+  workerTerminationGracePeriodSeconds: 60   # empty = same as the leader's; 0 = SIGKILL at once
   leaderPreStopKill: true
   rolloutStrategy:
     type: RollingUpdate
