@@ -297,13 +297,12 @@ containers:
   {{- if not (or (eq $gpus "") (eq $gpus "0")) }}
   {{- $res = mergeOverwrite (deepCopy $res) (dict "limits" (dict "nvidia.com/gpu" $gpus)) }}
   {{- end }}
-  {{- /* rdma.enabled adds the RDMA device the shared-device plugin hands out,
-         unless resources already names that resource -- the user's count
-         stands. */}}
+  {{- /* rdma.enabled adds one RDMA device from the shared-device plugin
+         (rdma/hca_shared), unless resources already asks for it -- the user's
+         count stands. */}}
   {{- if $root.Values.rdma.enabled }}
-  {{- $rname := $root.Values.rdma.resourceName }}
-  {{- if not (hasKey (index $res "limits" | default dict) $rname) }}
-  {{- $res = mergeOverwrite (deepCopy $res) (dict "limits" (dict $rname (toString $root.Values.rdma.resourceCount))) }}
+  {{- if not (hasKey (index $res "limits" | default dict) "rdma/hca_shared") }}
+  {{- $res = mergeOverwrite (deepCopy $res) (dict "limits" (dict "rdma/hca_shared" "1")) }}
   {{- end }}
   {{- end }}
   {{- with $res }}

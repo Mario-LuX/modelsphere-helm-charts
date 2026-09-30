@@ -786,13 +786,13 @@ podLabels: {}
 #
 #   - pod label rdma-ib: "true"  -> rdma-injector (charts/rdma-injector) sources
 #     the node's healthy HCAs into NCCL_IB_HCA at container start
-#   - resources.limits[resourceName]: resourceCount -> the RDMA device from the
+#   - resources.limits "rdma/hca_shared": 1 -> one RDMA device from the
 #     shared-device plugin
 #   - capability IPC_LOCK -> the driver can pin its buffers
 #
 # Off by default because each of them assumes something about the cluster: the
-# resource makes the pod Pending forever where no plugin advertises it (and its
-# name is whatever the plugin was configured with), IPC_LOCK is refused in a
+# resource makes the pod Pending forever where no plugin advertises it, IPC_LOCK
+# is refused in a
 # namespace enforcing Pod Security "baseline" or stricter, and the label gets a
 # pod rejected if rdma-injector was removed but its webhook configuration left
 # behind (failurePolicy: Fail).
@@ -800,10 +800,13 @@ podLabels: {}
 # Anything already written under podLabels, resources or securityContext for
 # the same key is kept as written. Applies to every engine pod; outside
 # lws.enabled nothing crosses nodes, so it buys nothing there.
+#
+# The resource name is fixed to rdma/hca_shared, what our shared-device plugin
+# is configured to advertise. On a cluster whose plugin uses another name, leave
+# this off and set the three by hand under podLabels, resources and
+# securityContext.
 rdma:
   enabled: false
-  resourceName: rdma/hca_shared
-  resourceCount: 1
 
 # A PodDisruptionBudget over the engine pods, so a node drain or a
 # cluster-autoscaler scale-down cannot take this model out all at once. The CART
