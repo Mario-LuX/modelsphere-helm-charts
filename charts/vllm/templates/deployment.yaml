@@ -1,18 +1,11 @@
-{{/*
-  Everything the shutdown does has to fit inside terminationGracePeriodSeconds.
-  That timer starts when the pod is marked Terminating and covers BOTH the
-  preStop hook and vLLM finishing up after SIGTERM. If the total is too big the
-  kubelet kills the pod while requests are still running, so fail here rather
-  than ship a config that quietly drops them.
-*/}}
-{{- $preStop := .Values.lifecycle.preStop }}
-{{- $budget := int .Values.lifecycle.shutdownTimeout }}
-{{- if $preStop.enabled }}
-{{- $budget = add $budget (int $preStop.endpointSyncSeconds) (int $preStop.drainSeconds) }}
-{{- end }}
-{{- if gt (int $budget) (int .Values.terminationGracePeriodSeconds) }}
-{{- fail (printf "vllm: terminationGracePeriodSeconds (%d) is smaller than the shutdown budget (%d = preStop endpointSyncSeconds %d + drainSeconds %d + lifecycle.shutdownTimeout %d); the pod would be SIGKILLed mid-drain" (int .Values.terminationGracePeriodSeconds) (int $budget) (int $preStop.endpointSyncSeconds) (int $preStop.drainSeconds) (int .Values.lifecycle.shutdownTimeout)) }}
-{{- end }}
+{{- /*
+  One node per replica. The multi-node form of this deployment -- one model
+  instance spanning several nodes -- is a LeaderWorkerSet instead, rendered by
+  lws.yaml when lws.enabled. The two are alternatives: a model either fits on one
+  node or it does not, so exactly one of them exists in a release.
+*/ -}}
+{{- if not .Values.lws.enabled -}}
+{{- include "vllm.shutdownBudget" . }}
 {{/*
   A rollout has a budget too, at the other end of the pod's life. The
   replacement pod has progressDeadlineSeconds to reach Ready, and its
@@ -22,58 +15,14 @@
   ProgressDeadlineExceeded -- no rollback, the old pods keep serving, but
   `kubectl rollout status` and any GitOps controller watching it report a failed
   rollout. Fail here instead, where the numbers are visible.
+
+  Deployment-only: a LeaderWorkerSet has no progress deadline to blow.
 */}}
 {{- $sp := .Values.startupProbe | default dict }}
 {{- $startupBudget := add (int ($sp.initialDelaySeconds | default 0)) (mul (int ($sp.failureThreshold | default 3)) (int ($sp.periodSeconds | default 10))) }}
 {{- $deadline := int (.Values.progressDeadlineSeconds | default 600) }}
 {{- if le $deadline $startupBudget }}
 {{- fail (printf "vllm: progressDeadlineSeconds (%d) does not clear the startupProbe budget (%d = failureThreshold %d x periodSeconds %d); the rollout would be marked ProgressDeadlineExceeded while the new pod is still legitimately loading the model. Raise it past the startup budget plus image-pull time" $deadline $startupBudget (int ($sp.failureThreshold | default 3)) (int ($sp.periodSeconds | default 10))) }}
-{{- end }}
-{{- /* Defined -- including as [] -- takes the container over, and nothing the
-       chart would build is used. [] renders no command at all: the image's own
-       ENTRYPOINT. */}}
-{{- $cmd := .Values.commandOverride }}
-{{- $override := not (kindIs "invalid" $cmd) }}
-{{- /* Empty means no model volume: no hostPath, no mount. */}}
-{{- $hasModel := ne (toString (.Values.model.localPath | default "")) "" }}
-{{- if and $override .Values.extraArgs }}
-{{- fail (printf "vllm: extraArgs is set (%v) but commandOverride replaces the command line the chart would append it to, so these flags would reach nothing. Fold them into commandOverride, or drop it" .Values.extraArgs) }}
-{{- end }}
-{{- if and (not $override) (not $hasModel) }}
-{{- fail "vllm: model.localPath is empty while the chart is still building vLLM's command line, and vLLM cannot start without --model. Set commandOverride to run a non-vLLM image, or point model.localPath at the weights" }}
-{{- end }}
-{{- /*
-  The engine command line, built once. Skipped entirely under commandOverride.
-
-  extraArgs stays last so it can override anything above it -- vLLM's argparse
-  takes the last occurrence of a repeated flag.
-*/}}
-{{- $flags := list
-      (printf "--model=%s" .Values.model.mountPath)
-      (printf "--served-model-name=%s" .Values.model.name)
-      "--host=0.0.0.0"
-      (printf "--port=%v" .Values.service.port) }}
-{{- /* Left out when empty, so vLLM uses the model's own max length.
-       model.maxLen is the old name of model.contextLength and still wins when
-       set, so values written for earlier chart versions keep their meaning. */}}
-{{- $ctxLen := .Values.model.contextLength }}
-{{- if hasKey .Values.model "maxLen" }}
-{{- $ctxLen = .Values.model.maxLen }}
-{{- end }}
-{{- with $ctxLen }}
-{{- $flags = append $flags (printf "--max-model-len=%v" .) }}
-{{- end }}
-{{- /* Once SIGTERM arrives, give requests that are still running this long to
-       finish instead of killing them (vLLM's default is 0 = kill). This catches
-       anything that ran past the preStop hook below. */}}
-{{- if gt (int .Values.lifecycle.shutdownTimeout) 0 }}
-{{- $flags = append $flags (printf "--shutdown-timeout=%v" .Values.lifecycle.shutdownTimeout) }}
-{{- end }}
-{{- /* toString, so a YAML-typed entry (`- 2` under `- --tensor-parallel-size`)
-       reaches the pod as the string the API server requires rather than an int
-       it rejects. */}}
-{{- range .Values.extraArgs }}
-{{- $flags = append $flags (toString .) }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -125,216 +74,11 @@ spec:
     metadata:
       labels:
         app: {{ .Release.Name }}-vllm
-        {{- with .Values.podLabels }}
-        {{- toYaml . | nindent 8 }}
+        {{- with (include "vllm.podLabels" .) }}
+        {{- . | nindent 8 }}
         {{- end }}
     spec:
-      # Total time allowed to shut down. The preStop hook AND vLLM finishing up after SIGTERM both come out of this, or the pod gets killed.
-      # Checked at render time by the block at the top of this file.
-      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
-      {{- if .Values.modelCheck.enabled }}
-      initContainers:
-      # Refuse to start the engine unless the mounted model directory actually
-      # holds a model. hostPathType above already rejects a missing path; this
-      # covers an empty or half-copied one. Reuses the engine image so no extra
-      # image has to be pulled, and takes no GPU.
-      - name: model-check
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-        command:
-          - /bin/sh
-          - -c
-          - |
-            DIR={{ .Values.model.mountPath | quote }}
-            if [ ! -d "$DIR" ]; then
-              echo "model-check: $DIR is not a directory" >&2
-              exit 1
-            fi
-            if [ -z "$(ls -A "$DIR" 2>/dev/null)" ]; then
-              echo "model-check: $DIR is empty -- is {{ .Values.model.localPath }} populated on this node?" >&2
-              exit 1
-            fi
-            {{- range .Values.modelCheck.requiredGlobs }}
-            if [ -z "$(find "$DIR" -maxdepth 1 -name {{ . | quote }} -print -quit)" ]; then
-              echo "model-check: no {{ . }} directly under $DIR -- looks like an incomplete model" >&2
-              exit 1
-            fi
-            {{- end }}
-            echo "model-check: $DIR looks like a model directory"
-        volumeMounts:
-        - name: model-storage
-          mountPath: {{ .Values.model.mountPath }}
-          readOnly: true
-      {{- end }}
-      containers:
-      - name: vllm
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-        {{- if $override }}
-        {{- with $cmd }}
-        command:
-          {{- range . }}
-          - {{ toString . | quote }}
-          {{- end }}
-        {{- end }}
-        {{- else }}
-        command: ["python3", "-m", "vllm.entrypoints.openai.api_server"]
-        args:
-          {{- range $flags }}
-          - {{ . | quote }}
-          {{- end }}
-        {{- end }}
-        {{- with .Values.env }}
-        env:
-          {{- toYaml . | nindent 10 }}
-        {{- end }}
-        ports:
-        - containerPort: {{ .Values.service.port }}
-          name: http
-        {{- with .Values.securityContext }}
-        securityContext:
-          {{- toYaml . | nindent 10 }}
-        {{- end }}
-        {{- if or $hasModel .Values.volumeMounts }}
-        volumeMounts:
-        {{- if $hasModel }}
-        - name: model-storage
-          mountPath: {{ .Values.model.mountPath }}
-          readOnly: true
-        {{- end }}
-        {{- with .Values.volumeMounts }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
-        {{- end }}
-        {{- /* The GPU limit stays derived from model.gpus -- the one place this
-               chart names a GPU count -- and is merged over whatever else is in
-               .Values.resources, so cpu/memory/ephemeral-storage can be set
-               without restating it. A second way to say "2 GPUs" would only
-               drift, so naming it under resources is refused rather than
-               silently ignored.
-
-               nvidia.com/gpu is an extended resource: it belongs in limits
-               only, and the kubelet sets the request equal to it. Empty or 0
-               leaves the key out altogether rather than asking for zero of it. */}}
-        {{- $res := .Values.resources | default dict }}
-        {{- range $section := list "limits" "requests" }}
-        {{- if hasKey (index $res $section | default dict) "nvidia.com/gpu" }}
-        {{- fail (printf "vllm: set the GPU count with model.gpus, not resources.%s -- model.gpus is what renders nvidia.com/gpu and what the rest of the chart refers to" $section) }}
-        {{- end }}
-        {{- end }}
-        {{- $gpus := toString (.Values.model.gpus | default "") }}
-        {{- if not (or (eq $gpus "") (eq $gpus "0")) }}
-        {{- $res = mergeOverwrite (deepCopy $res) (dict "limits" (dict "nvidia.com/gpu" $gpus)) }}
-        {{- end }}
-        {{- with $res }}
-        resources:
-          {{- toYaml . | nindent 10 }}
-        {{- end }}
-        {{- if $preStop.enabled }}
-        lifecycle:
-          preStop:
-            # Runs before SIGTERM, and its time counts against terminationGracePeriodSeconds.
-            # Written in python3 because that is what the container already runs, so it is always there -- the vLLM image ships no curl or wget. Needs no external drain API.
-            exec:
-              command:
-                - python3
-                - -c
-                - |
-                  {{- include "vllm.preStopScript" . | nindent 18 }}
-        {{- end }}
-        {{- with .Values.startupProbe }}
-        # While this is running the kubelet suppresses the other two probes, so a
-        # slow model load cannot trip a restart. Its
-        # failureThreshold x periodSeconds is the entire startup budget.
-        startupProbe:
-          {{- toYaml . | nindent 10 }}
-        {{- end }}
-        {{- with .Values.readinessProbe }}
-        readinessProbe:
-          {{- toYaml . | nindent 10 }}
-        {{- end }}
-        {{- if .Values.hangWatcher.enabled }}
-        # hang-watcher owns liveness: probe the sidecar's /healthz on the shared
-        # pod network; a 503 (hang) restarts THIS container. Replaces the default
-        # livenessProbe -- see hangWatcher in values.yaml for why.
-        livenessProbe:
-          httpGet:
-            path: /healthz
-            port: {{ .Values.hangWatcher.port }}
-          {{- with .Values.hangWatcher.livenessProbe }}
-          {{- toYaml . | nindent 10 }}
-          {{- end }}
-        {{- else }}
-        {{- with .Values.livenessProbe }}
-        livenessProbe:
-          {{- toYaml . | nindent 10 }}
-        {{- end }}
-        {{- end }}
-      {{- if .Values.hangWatcher.enabled }}
-      # Hang-detection sidecar (see hangWatcher in values.yaml). Reads this pod's
-      # own vLLM /metrics over localhost and serves /healthz for the engine's
-      # livenessProbe above. Reports only; the kubelet does the restart. No RBAC.
-      - name: hang-watcher
-        image: "{{ .Values.hangWatcher.image.repository }}:{{ .Values.hangWatcher.image.tag }}"
-        env:
-        - name: ENGINE_URL
-          value: "http://127.0.0.1:{{ .Values.service.port }}"
-        - name: LISTEN
-          value: ":{{ .Values.hangWatcher.port }}"
-        - name: CONFIG_FILE
-          value: /etc/hang-watcher/config.json
-        ports:
-        - containerPort: {{ .Values.hangWatcher.port }}
-          name: hang-hz
-        {{- with .Values.hangWatcher.readinessProbe }}
-        # Readiness on the sidecar itself: a pod is an endpoint only while every container is
-        # ready, so a hang verdict drops the POD out of the Service before the restart even
-        # starts. The engine's own readinessProbe is untouched and still applies.
-        readinessProbe:
-          httpGet:
-            path: /healthz
-            port: {{ $.Values.hangWatcher.port }}
-          {{- toYaml . | nindent 10 }}
-        {{- end }}
-        volumeMounts:
-        - name: hang-watcher-config
-          mountPath: /etc/hang-watcher
-          readOnly: true
-        {{- with .Values.hangWatcher.resources }}
-        resources:
-          {{- toYaml . | nindent 10 }}
-        {{- end }}
-      {{- end }}
-      {{- if or $hasModel .Values.hangWatcher.enabled .Values.volumes }}
-      volumes:
-      {{- if $hasModel }}
-      - name: model-storage
-        hostPath:
-          path: {{ .Values.model.localPath }}
-          type: {{ .Values.model.hostPathType }}
-      {{- end }}
-      {{- if .Values.hangWatcher.enabled }}
-      - name: hang-watcher-config
-        configMap:
-          name: {{ .Release.Name }}-hang-watcher
-      {{- end }}
-      {{- with .Values.volumes }}
-      {{- toYaml . | nindent 6 }}
-      {{- end }}
-      {{- end }}
-      {{- with .Values.schedulerName }}
-      schedulerName: {{ . }}
-      {{- end }}
-      {{- with .Values.priorityClassName }}
-      priorityClassName: {{ . }}
-      {{- end }}
-      {{- with .Values.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.tolerations }}
-      tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+      {{- /* The pod itself lives in _pod.tpl, shared with the LWS leader and
+             worker so the three cannot drift apart. */}}
+      {{- include "vllm.podSpec" (dict "root" . "role" "single") | nindent 6 }}
+{{- end }}

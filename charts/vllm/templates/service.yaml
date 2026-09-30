@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "vllm.fullname" . }}
+  name: {{ include "vllm.serviceName" . }}
   namespace: {{ .Release.Namespace }}
   labels:
     app: {{ .Release.Name }}-vllm
@@ -9,6 +9,15 @@ spec:
   type: {{ .Values.service.type }}
   selector:
     app: {{ .Release.Name }}-vllm
+    {{- if .Values.lws.enabled }}
+    # Under LWS the group's workers carry the same app label but run no API
+    # server -- they are vLLM --headless. Without this they would join the
+    # EndpointSlice and blackhole a share of the traffic (and of the
+    # ServiceMonitor's scrapes). The leader IS the instance's front door, so
+    # this Service still means "the model", and every consumer of it --
+    # ModelRoute, CART, openresty, Prometheus -- keeps working unchanged.
+    role: leader
+    {{- end }}
   ports:
   - port: {{ .Values.service.port }}
     targetPort: {{ .Values.service.port }}

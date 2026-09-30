@@ -60,6 +60,9 @@
   extraArgs stays last so it can override anything above it -- SGLang's argparse
   takes the last occurrence of a repeated flag.
 */}}
+{{- /* The flags the chart itself derives from the LWS environment at runtime --
+       the only ones the multi-node shell may expand. */}}
+{{- $expand := list }}
 {{- $flags := list
       (printf "--model-path=%s" $root.Values.model.mountPath)
       (printf "--served-model-name=%s" $root.Values.model.name)
@@ -90,7 +93,9 @@
 */}}
 {{- $flags = append $flags (printf "--nnodes=%v" $lws.size) }}
 {{- $flags = append $flags (printf "--node-rank=%s" (ternary "${LWS_WORKER_INDEX}" "0" $worker)) }}
+{{- $expand = append $expand (last $flags) }}
 {{- $flags = append $flags (printf "--dist-init-addr=${LWS_LEADER_ADDRESS}:%v" $lws.distPort) }}
+{{- $expand = append $expand (last $flags) }}
 {{- end }}
 {{- /* toString, so a YAML-typed entry (`- 8` under `- --tp`) reaches the pod as
        the string the API server requires rather than an int it rejects. */}}
@@ -102,8 +107,11 @@
        and their whole group is being deleted with them -- a long grace only
        holds GPUs until the kubelet's SIGKILL. */}}
 {{- $grace := $root.Values.terminationGracePeriodSeconds }}
-{{- if and $worker $lws.workerTerminationGracePeriodSeconds }}
-{{- $grace = $lws.workerTerminationGracePeriodSeconds }}
+{{- /* 0 is a real value (SIGKILL at once -- a worker drains nothing); only
+       empty or null means "same as the leader's". */}}
+{{- $wg := $lws.workerTerminationGracePeriodSeconds }}
+{{- if and $worker (not (kindIs "invalid" $wg)) (ne (toString $wg) "") }}
+{{- $grace = $wg }}
 {{- end }}
 terminationGracePeriodSeconds: {{ $grace }}
 {{- /* Workers wait for the leader's rendezvous port; leaders wait for nothing. */}}
@@ -196,15 +204,19 @@ containers:
   # IB fabric. Guarded, because a container without CAP_IPC_LOCK cannot raise it
   # and that is not a reason to refuse to start.
   #
-  # Flags carrying a ${...} are left unquoted so the shell expands them; the rest
-  # are single-quoted, so a value with a space in it (a JSON --*-override-args,
-  # say) survives the trip through bash.
+  # Every flag reaches the engine exactly as written. The ones the chart derives
+  # from the LWS environment (the rank and the leader's address) are
+  # double-quoted so bash expands their ${...}; everything else -- extraArgs
+  # included -- is single-quoted with any ' inside escaped, so spaces, quotes,
+  # $ and JSON survive the trip through bash untouched, the same as in the
+  # single-pod exec form. To reference the container's env from extraArgs, use
+  # Kubernetes' $(VAR) syntax: the kubelet expands it in either form.
   command: ["bash", "-lc"]
   args:
     - |
       ulimit -l unlimited 2>/dev/null || true
       exec sglang serve{{ range $flags }} \
-        {{ if contains "$" . }}{{ . }}{{ else }}{{ squote . }}{{ end }}{{ end }}
+        {{ if has . $expand }}"{{ . }}"{{ else }}'{{ replace "'" "'\\''" . }}'{{ end }}{{ end }}
   {{- else }}
   command: ["sglang", "serve"]
   args:
@@ -239,7 +251,19 @@ containers:
   - containerPort: {{ $root.Values.service.port }}
     name: http
   {{- end }}
-  {{- with $root.Values.securityContext }}
+  {{- /* rdma.enabled adds IPC_LOCK to whatever securityContext says, so the
+         RDMA driver can pin its buffers (and the lws command form's
+         `ulimit -l unlimited` actually takes). Added once, never duplicated. */}}
+  {{- $sc := deepCopy ($root.Values.securityContext | default dict) }}
+  {{- if and $root.Values.rdma.enabled $multi }}
+  {{- $caps := $sc.capabilities | default dict }}
+  {{- $add := $caps.add | default list }}
+  {{- if not (has "IPC_LOCK" $add) }}
+  {{- $_ := set $caps "add" (append $add "IPC_LOCK") }}
+  {{- end }}
+  {{- $_ := set $sc "capabilities" $caps }}
+  {{- end }}
+  {{- with $sc }}
   securityContext:
     {{- toYaml . | nindent 4 }}
   {{- end }}
@@ -273,6 +297,16 @@ containers:
   {{- $gpus := toString ($root.Values.model.gpus | default "") }}
   {{- if not (or (eq $gpus "") (eq $gpus "0")) }}
   {{- $res = mergeOverwrite (deepCopy $res) (dict "limits" (dict "nvidia.com/gpu" $gpus)) }}
+  {{- end }}
+  {{- /* rdma.enabled adds one RDMA device from the shared-device plugin
+         (rdma/hca_shared), unless resources already asks for it -- the user's
+         count stands. A null there counts as not asking: it is what a values
+         overlay leaves behind when it removes a hand-written entry, and the
+         point of such an overlay is to hand the job to this switch. */}}
+  {{- if and $root.Values.rdma.enabled $multi }}
+  {{- if kindIs "invalid" (index (index $res "limits" | default dict) "rdma/hca_shared") }}
+  {{- $res = mergeOverwrite (deepCopy $res) (dict "limits" (dict "rdma/hca_shared" "1")) }}
+  {{- end }}
   {{- end }}
   {{- with $res }}
   resources:

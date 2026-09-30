@@ -55,6 +55,46 @@
       "type": "string"
     },
     "replicaCount": { "type": "integer", "minimum": 0 },
+
+    "lws": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "size": { "type": "integer", "minimum": 1 },
+        "replicas": { "type": "integer", "minimum": 0 },
+        "distPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "startupPolicy": { "type": "string", "enum": ["LeaderCreated", "LeaderReady"] },
+        "restartPolicy": { "type": "string", "enum": ["Default", "RecreateGroupOnPodRestart"] },
+        "subdomainPolicy": { "type": "string", "enum": ["Shared", "UniquePerReplica"] },
+        "waitForLeader": { "type": "boolean" },
+        "workerTerminationGracePeriodSeconds": {
+          "description": "Empty or null means \"same as the leader's\"; 0 is a real value (no grace).",
+          "oneOf": [
+            { "type": "integer", "minimum": 0 },
+            { "type": "string", "pattern": "^[0-9]*$" },
+            { "type": "null" }
+          ]
+        },
+        "leaderPreStopKill": { "type": "boolean" },
+        "rolloutStrategy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": { "type": "string", "enum": ["RollingUpdate"] },
+            "rollingUpdateConfiguration": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "maxSurge": { "$ref": "#/definitions/intOrPercent" },
+                "maxUnavailable": { "$ref": "#/definitions/intOrPercent" }
+              }
+            }
+          }
+        }
+      }
+    },
+
     "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0 },
     "progressDeadlineSeconds": { "type": "integer", "minimum": 1 },
     "revisionHistoryLimit": { "type": "integer", "minimum": 0 },
@@ -182,7 +222,9 @@
           "description": "vLLM's own --shutdown-timeout. 0 leaves the flag off entirely (older images, or to keep vLLM's default of killing in-flight requests on SIGTERM).",
           "type": "integer",
           "minimum": 0
-        }
+        },
+        "shutdownReserveSeconds": { "type": "integer", "minimum": 0 },
+        "preStopKill": { "type": "boolean" }
       }
     },
 
@@ -364,6 +406,14 @@
             "router": { "type": ["object", "null"] }
           }
         }
+      }
+    },
+
+    "rdma": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" }
       }
     },
 
