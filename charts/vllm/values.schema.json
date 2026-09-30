@@ -405,6 +405,16 @@
       }
     },
 
+    "rdma": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "resourceName": { "type": "string", "minLength": 1 },
+        "resourceCount": { "type": ["integer", "string"] }
+      }
+    },
+
     "podDisruptionBudget": {
       "type": "object",
       "additionalProperties": false,

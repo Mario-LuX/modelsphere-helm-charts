@@ -70,8 +70,8 @@ spec:
           app: {{ .Release.Name }}-sglang
           # what the Service selects on -- workers run no HTTP server
           role: leader
-          {{- with .Values.podLabels }}
-          {{- toYaml . | nindent 10 }}
+          {{- with (include "sglang.podLabels" .) }}
+          {{- . | nindent 10 }}
           {{- end }}
       spec:
         {{- include "sglang.podSpec" (dict "root" . "role" "leader") | nindent 8 }}
@@ -80,8 +80,8 @@ spec:
         labels:
           app: {{ .Release.Name }}-sglang
           role: worker
-          {{- with .Values.podLabels }}
-          {{- toYaml . | nindent 10 }}
+          {{- with (include "sglang.podLabels" .) }}
+          {{- . | nindent 10 }}
           {{- end }}
       spec:
         {{- include "sglang.podSpec" (dict "root" . "role" "worker") | nindent 8 }}

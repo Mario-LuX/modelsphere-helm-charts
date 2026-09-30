@@ -72,8 +72,8 @@ spec:
           app: {{ .Release.Name }}-vllm
           # what the Service selects on -- workers run no API server
           role: leader
-          {{- with .Values.podLabels }}
-          {{- toYaml . | nindent 10 }}
+          {{- with (include "vllm.podLabels" .) }}
+          {{- . | nindent 10 }}
           {{- end }}
       spec:
         {{- include "vllm.podSpec" (dict "root" . "role" "leader") | nindent 8 }}
@@ -82,8 +82,8 @@ spec:
         labels:
           app: {{ .Release.Name }}-vllm
           role: worker
-          {{- with .Values.podLabels }}
-          {{- toYaml . | nindent 10 }}
+          {{- with (include "vllm.podLabels" .) }}
+          {{- . | nindent 10 }}
           {{- end }}
       spec:
         {{- include "vllm.podSpec" (dict "root" . "role" "worker") | nindent 8 }}

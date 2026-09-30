@@ -74,8 +74,8 @@ spec:
     metadata:
       labels:
         app: {{ .Release.Name }}-vllm
-        {{- with .Values.podLabels }}
-        {{- toYaml . | nindent 8 }}
+        {{- with (include "vllm.podLabels" .) }}
+        {{- . | nindent 8 }}
         {{- end }}
     spec:
       {{- /* The pod itself lives in _pod.tpl, shared with the LWS leader and

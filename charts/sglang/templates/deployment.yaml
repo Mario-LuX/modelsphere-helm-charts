@@ -74,8 +74,8 @@ spec:
     metadata:
       labels:
         app: {{ .Release.Name }}-sglang
-        {{- with .Values.podLabels }}
-        {{- toYaml . | nindent 8 }}
+        {{- with (include "sglang.podLabels" .) }}
+        {{- . | nindent 8 }}
         {{- end }}
     spec:
       {{- /* The pod itself lives in _pod.tpl, shared with the LWS leader and

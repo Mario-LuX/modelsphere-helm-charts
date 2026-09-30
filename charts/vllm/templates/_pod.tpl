@@ -247,7 +247,19 @@ containers:
   - containerPort: {{ $root.Values.service.port }}
     name: http
   {{- end }}
-  {{- with $root.Values.securityContext }}
+  {{- /* rdma.enabled adds IPC_LOCK to whatever securityContext says, so the
+         RDMA driver can pin its buffers (and the lws command form's
+         `ulimit -l unlimited` actually takes). Added once, never duplicated. */}}
+  {{- $sc := deepCopy ($root.Values.securityContext | default dict) }}
+  {{- if $root.Values.rdma.enabled }}
+  {{- $caps := $sc.capabilities | default dict }}
+  {{- $add := $caps.add | default list }}
+  {{- if not (has "IPC_LOCK" $add) }}
+  {{- $_ := set $caps "add" (append $add "IPC_LOCK") }}
+  {{- end }}
+  {{- $_ := set $sc "capabilities" $caps }}
+  {{- end }}
+  {{- with $sc }}
   securityContext:
     {{- toYaml . | nindent 4 }}
   {{- end }}
@@ -284,6 +296,15 @@ containers:
   {{- $gpus := toString ($root.Values.model.gpus | default "") }}
   {{- if not (or (eq $gpus "") (eq $gpus "0")) }}
   {{- $res = mergeOverwrite (deepCopy $res) (dict "limits" (dict "nvidia.com/gpu" $gpus)) }}
+  {{- end }}
+  {{- /* rdma.enabled adds the RDMA device the shared-device plugin hands out,
+         unless resources already names that resource -- the user's count
+         stands. */}}
+  {{- if $root.Values.rdma.enabled }}
+  {{- $rname := $root.Values.rdma.resourceName }}
+  {{- if not (hasKey (index $res "limits" | default dict) $rname) }}
+  {{- $res = mergeOverwrite (deepCopy $res) (dict "limits" (dict $rname (toString $root.Values.rdma.resourceCount))) }}
+  {{- end }}
   {{- end }}
   {{- with $res }}
   resources:

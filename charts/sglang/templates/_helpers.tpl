@@ -70,3 +70,19 @@
 {{- fail (printf "sglang: terminationGracePeriodSeconds (%d) is smaller than the shutdown budget (%d = preStop endpointSyncSeconds %d + drainSeconds %d + lifecycle.shutdownReserveSeconds %d); the pod would be SIGKILLed mid-drain" (int .Values.terminationGracePeriodSeconds) (int $budget) (int $preStop.endpointSyncSeconds) (int $preStop.drainSeconds) (int .Values.lifecycle.shutdownReserveSeconds)) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+  The labels every engine pod carries on top of the chart's own (app, role):
+  podLabels, plus rdma-ib: "true" when rdma.enabled -- the label rdma-injector
+  keys off. A podLabels entry of the same name wins, so a hand-written one is
+  neither duplicated (which would be invalid YAML) nor overridden.
+
+  Renders nothing when there is nothing to add.
+*/}}
+{{- define "sglang.podLabels" -}}
+{{- $labels := deepCopy (.Values.podLabels | default dict) -}}
+{{- if .Values.rdma.enabled -}}
+{{- $labels = merge $labels (dict "rdma-ib" "true") -}}
+{{- end -}}
+{{- with $labels }}{{ toYaml . }}{{ end -}}
+{{- end -}}
