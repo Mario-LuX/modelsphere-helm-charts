@@ -1,4 +1,4 @@
-# ModelPilot Helm Charts
+# ModelSphere Helm Charts
 
 Helm charts for running large language models on Kubernetes: the inference
 engine itself, the cache-aware router in front of it, and the pieces that keep
