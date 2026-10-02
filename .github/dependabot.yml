@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # Only the Actions. The charts' one dependency is the local file://../cart,
+  # which has no upstream to update. The images the charts default to are
+  # bumped by hand together with the chart version, since a bump republishes.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
