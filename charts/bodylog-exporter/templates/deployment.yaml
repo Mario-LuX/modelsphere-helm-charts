@@ -1,6 +1,14 @@
 {{- if and .Values.data.hostPath (empty .Values.nodeSelector) }}
 {{- fail "\n[bodylog-exporter] data.hostPath is set but nodeSelector is empty. The detail records live on a node-local disk, so this pod must run on the same node as the listener that writes them. Pin it, e.g. --set nodeSelector.\"kubernetes\\.io/hostname\"=<node>" }}
 {{- end }}
+{{- /* A list of groups is understood from exporter 0.2.8 on; an older image pinned in
+       image.tag would request /apis/<a>,<b>/... and lose route discovery entirely. */}}
+{{- $tag := toString .Values.image.tag }}
+{{- if and (contains "," .Values.routeDiscovery.apiGroup) (regexMatch "^v?[0-9]+\\.[0-9]+\\.[0-9]+$" $tag) }}
+{{- if semverCompare "<0.2.8" $tag }}
+{{- fail (printf "\n[bodylog-exporter] image.tag=%s reads a single group, but routeDiscovery.apiGroup=%q lists several. Use image 0.2.8 or newer, or set one group." $tag .Values.routeDiscovery.apiGroup) }}
+{{- end }}
+{{- end }}
 {{- if empty .Values.data.hostPath }}
 {{- fail "\n[bodylog-exporter] data.hostPath is empty. It must point at the node directory the listener writes to (its persistence.hostPath), otherwise there are no records to read." }}
 {{- end }}
