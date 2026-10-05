@@ -68,6 +68,10 @@ openrestyPoll:
 # no operator installed, set openrestyPoll.routes instead.
 routeDiscovery:
   enabled: true
+  # One group, or several comma-separated (exporter 0.2.8 or newer) for a cluster whose
+  # ModelRoutes are moving between groups: every group listed is read and granted in RBAC,
+  # an object in more than one is taken from the earliest, a group the cluster does not
+  # serve is skipped.
   apiGroup: routing.modelsphere.dev
   version: v1alpha1
   plural: modelroutes

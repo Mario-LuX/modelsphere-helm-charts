@@ -27,7 +27,10 @@ metadata:
   name: {{ include "bodylog-exporter.fullname" . }}-modelroute-reader
   labels: {{- include "bodylog-exporter.labels" . | nindent 4 }}
 rules:
-  - apiGroups: [ "{{ .Values.routeDiscovery.apiGroup }}" ]
+  - apiGroups:
+    {{- range splitList "," .Values.routeDiscovery.apiGroup }}
+      - {{ trim . | quote }}
+    {{- end }}
     resources: [ "{{ .Values.routeDiscovery.plural }}" ]
     verbs: [ "get", "list", "watch" ]
   - apiGroups: [ "discovery.k8s.io" ]
