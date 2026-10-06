@@ -9,7 +9,7 @@ type: application
 # The chart version tracks appVersion for this chart, so the chart and the image
 # it ships share one number. Not a rule for every chart here: cart carries a
 # chart version of its own, independent of the app it ships.
-version: 0.1.13
+version: 0.1.14
 # The listener image tag: values.image.tag is empty by default and falls back to
 # this, so a release moves both together.
 #
