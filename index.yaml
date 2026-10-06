@@ -44,6 +44,25 @@ entries:
   bodylog:
   - apiVersion: v2
     appVersion: 0.1.13
+    created: "2026-10-06T02:14:10.016607406Z"
+    description: 'Body-log listener for the OpenResty router: receives full request/response
+      frames over TCP, writes them as hourly JSONL, and serves rollups over HTTP'
+    digest: d85bd28ddf4ad0c5aa3c940948d68d9c5eec0baf2c21bb0dd0ba6a28cfa99f44
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - bodylog
+    - openresty
+    - observability
+    name: bodylog
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/modelsphere/llm-openresty
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/bodylog-0.1.14/bodylog-0.1.14.tgz
+    version: 0.1.14
+  - apiVersion: v2
+    appVersion: 0.1.13
     created: "2026-09-22T09:12:42.321987177Z"
     description: 'Body-log listener for the OpenResty router: receives full request/response
       frames over TCP, writes them as hourly JSONL, and serves rollups over HTTP'
@@ -62,6 +81,26 @@ entries:
     - https://github.com/modelsphere/helm-charts/releases/download/bodylog-0.1.13/bodylog-0.1.13.tgz
     version: 0.1.13
   bodylog-exporter:
+  - apiVersion: v2
+    appVersion: 0.2.8
+    created: "2026-10-06T02:14:10.245367549Z"
+    description: Turns the body-log listener's detail records into Prometheus metrics,
+      and polls the router's control-plane endpoints for live routing state
+    digest: 6da6ddca6635edfb771f39cd656fa5b8a95632d221504840c0342831e0a5310d
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - bodylog
+    - exporter
+    - prometheus
+    - observability
+    name: bodylog-exporter
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/modelsphere/llm-openresty
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/bodylog-exporter-0.3.3/bodylog-exporter-0.3.3.tgz
+    version: 0.3.3
   - apiVersion: v2
     appVersion: 0.2.8
     created: "2026-10-05T06:22:55.334906502Z"
@@ -376,6 +415,27 @@ entries:
     - https://github.com/modelsphere/helm-charts/releases/download/llmscaleoperator-0.2.1/llmscaleoperator-0.2.1.tgz
     version: 0.2.1
   openresty:
+  - apiVersion: v2
+    appVersion: 0.1.20
+    created: "2026-10-06T02:14:10.470396107Z"
+    description: 'Session-affinity router for LLM inference backends: pins a conversation
+      to the backend that already holds its prefix cache, with active health checking,
+      adaptive concurrency and full body logging'
+    digest: a9c8c2fc8e7aa02e8c015fd40a861ee1a6064aab14a659ddb113d67bf68a08d4
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - openresty
+    - routing
+    - session-affinity
+    - autoconfig
+    name: openresty
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/modelsphere/llm-openresty
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/openresty-0.1.21/openresty-0.1.21.tgz
+    version: 0.1.21
   - apiVersion: v2
     appVersion: 0.1.20
     created: "2026-09-22T09:12:42.683439268Z"
@@ -979,4 +1039,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-10-05T06:22:55.537237947Z"
+generated: "2026-10-06T02:14:10.470491279Z"
