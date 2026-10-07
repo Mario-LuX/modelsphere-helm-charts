@@ -86,6 +86,20 @@
        evaluated under $cartOn, which is exactly what cart.enabled gates. */}}
 {{- $sub := dict "Values" .Values.cart "Chart" (dict "Name" "cart") "Release" .Release }}
 
+{{- /* The continuation gateway, when this release deploys one, takes CART's place as
+       what nginx talks to: nginx -> gateway -> CART -> engine. The CRD has no peer
+       type for it, but it does not need one. spec.cart.service is only what nginx's
+       cart peer resolves to (the Service's ClusterIP) -- the CART's worker list is
+       written to cart.outputConfigMap off the discovery bucket, not off the pods
+       behind cart.service -- so pointing service/port at the gateway puts it in the
+       path while the ConfigMap below keeps feeding the real CART. The gateway answers
+       /health, which is the probe the cart peer is given by default.
+
+       Same constraint as $sub above: the subchart's helper only exists while the
+       subchart is enabled, hence the guard. */}}
+{{- $gwOn := and $cartOn .Values.continuationGateway.enabled }}
+{{- $gwSub := dict "Values" .Values.continuationGateway "Chart" (dict "Name" "continuation-gateway") "Release" .Release }}
+
 {{- if not $mr.nginx.outputConfigMap }}
 {{- fail "sglang: modelRoute.nginx.outputConfigMap is required -- it names the ConfigMap autoconfig writes this route into (\"ns/name\", e.g. llm-route/openresty-conf). The chart cannot guess where your openresty lives" }}
 {{- end }}
@@ -137,10 +151,17 @@ spec:
   # per-model by nature -- prefix affinity is only meaningful within one model --
   # so it is never shared, and two ModelRoutes never name the same one.
   cart:
+    {{- if $gwOn }}
+    # What nginx reaches is the continuation gateway in front of CART (see $gwOn);
+    # outputConfigMap below is still the CART's own.
+    service: {{ printf "%s/%s" .Release.Namespace (include "continuation-gateway.fullname" $gwSub) | quote }}
+    port: {{ .Values.continuationGateway.service.port }}
+    {{- else }}
     service: {{ printf "%s/%s" .Release.Namespace (include "cart.fullname" $sub) | quote }}
     # Emitted rather than left to autoconfig's auto-derivation, for the same
     # reason as discovery.port above.
     port: {{ .Values.cart.service.port }}
+    {{- end }}
     outputConfigMap: {{ printf "%s/%s" .Release.Namespace (include "cart.configMapName" $sub) | quote }}
     {{- with include "cart.autoconfigKey" $sub }}
     outputKey: {{ . | quote }}

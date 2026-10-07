@@ -328,6 +328,14 @@
       }
     },
 
+    "continuationGateway": {
+      "description": "The vendored continuation-gateway subchart owns its own values; only the condition key is asserted here.",
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
+
     "modelRoute": {
       "type": "object",
       "additionalProperties": false,

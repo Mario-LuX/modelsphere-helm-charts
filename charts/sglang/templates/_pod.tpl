@@ -85,7 +85,7 @@
 {{- $expand := list }}
 {{- $flags := list
       (printf "--model-path=%s" $root.Values.model.mountPath)
-      (printf "--served-model-name=%s" $root.Values.model.name)
+      (printf "--served-model-name=%s" (include "sglang.servedModelName" $root))
       "--host=0.0.0.0"
       (printf "--port=%v" $root.Values.service.port) }}
 {{- /* Left out when empty, so SGLang uses the model's own context length. */}}

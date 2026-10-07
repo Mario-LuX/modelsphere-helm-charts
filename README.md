@@ -17,6 +17,7 @@ helm search repo modelsphere
 | [`sglang`](charts/sglang) | An SGLang inference deployment — single-node or multi-node (LeaderWorkerSet) — with optional CART, autoscaling, and a hang watcher |
 | [`vllm`](charts/vllm) | The same, on vLLM |
 | [`cart`](charts/cart) | [CART](https://github.com/modelsphere/cache_aware_router) on its own: routes each request to the replica that already holds the longest matching prompt prefix |
+| [`continuation-gateway`](charts/continuation-gateway) | [continuation_gateway](https://github.com/modelsphere/continuation_gateway) on its own: when a streamed completion stalls or drops mid-generation, resumes it once from what the client already received, so the client sees one complete stream |
 | [`llm-slo-decision-gen`](charts/llm-slo-decision-gen) | Turns SLO requirements into replica recommendations: a decision service plus the SLO storage API and its two CRDs |
 | [`autoconfig`](charts/autoconfig) | Keeps the routing layer in step with what is actually deployed: watches backends and rewrites OpenResty peers and cache-aware-router workers |
 | [`llmscaleoperator`](charts/llmscaleoperator) | The autoscaler the `sglang` and `vllm` charts hand their `LLMScaler` objects to: scales replicas on KV-cache utilization, queue depth and TPM rather than CPU |
@@ -25,6 +26,12 @@ helm search repo modelsphere
 `sglang` and `vllm` pull in `cart` as a subchart, gated on `cart.enabled`.
 Installing either of them gives you an engine and a router that already know
 about each other.
+
+`sglang` also pulls in `continuation-gateway` as a subchart, gated on
+`continuationGateway.enabled` (off by default). Enabled, it sits in front of the
+model's `cart`; see the comment above `continuationGateway` in
+[`charts/sglang/values.yaml`](charts/sglang/values.yaml) for what that changes
+in the route.
 
 ## Quick start
 

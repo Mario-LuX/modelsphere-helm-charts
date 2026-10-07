@@ -1,0 +1,122 @@
+image:
+  # Docker Hub. Built by the continuation_gateway repo's release workflow on every
+  # version tag: tag vX.Y.Z is published as X.Y.Z (no `v`), plus latest for a release.
+  # A cluster without egress has to mirror it and point this at the mirror.
+  repository: 4pdosc/continuation_gateway
+  tag: ""              # empty falls back to Chart.appVersion
+  pullPolicy: IfNotPresent
+
+replicas: 2
+# The gateway keeps no state across requests (everything lives in one request's
+# coroutine), so replicas are interchangeable: no leader election, no sticky
+# sessions, scale it freely.
+
+# Where requests go. The gateway talks to exactly one URL and keeps no list of
+# inference instances: which instance serves a request, and routing around a dead
+# one, is the downstream's job.
+#
+# Installed as the continuationGateway subchart of sglang (or vllm), the default is
+# that release's own CART -- the chain is gateway -> CART -> engine -- reached through
+# its ClusterIP at <release>-cart.<namespace>.svc:<port>. That name is derived, not
+# looked up, from the same rule the cart chart names itself by, so it holds as long as
+# cart.fullnameOverride / cart.service.port are left alone. If you change either, or
+# the downstream is something else entirely, set `url` and the rest is ignored.
+downstream:
+  url: ""                # full override, e.g. http://router.example.com:8050
+  service: ""            # default: <release>-cart (cart chart's fullname)
+  namespace: ""          # default: the release namespace
+  port: 8071             # cart.service.port
+  # Send the resume request (leg 2) somewhere else than the original request (leg 1),
+  # e.g. a standby cluster. Empty = same URL as the original request.
+  continuationUrl: ""
+
+# Each value maps to the environment variable of the same name in upper snake case;
+# defaults and the full semantics live in continuation_gateway/config.py.
+config:
+  # Models that get resume behaviour, matched against the request's `model` field
+  # (case-insensitive). A comma-separated string like the gateway's CONTINUATION_MODELS,
+  # or a list. Empty falls back to global.modelName, which the parent chart sets to the
+  # engine's served model name (sglang does); if that is empty too, NOTHING is resumed
+  # and the gateway only proxies. Set it explicitly when the name clients send is not
+  # the one the engine was started with.
+  continuationModels: ""        # e.g. "kimi-k3,kimi-k3-0905" or [kimi-k3, kimi-k3-0905]
+  # false = watch and log, but never send the second request. For checking the
+  # detection path without putting real resume load on the downstream.
+  continuationEnabled: true
+  # Hold back tool_call chunks until the call is complete, so a crash mid-tool-call
+  # can be resumed from the state before it. Costs: tool_call arguments arrive in one
+  # piece instead of streaming. Has no effect while continuationEnabled is false.
+  bufferToolCalls: true
+  # No chunk for this long after the first one = stalled.
+  stallIdleTimeoutSeconds: 600
+  connectTimeoutSeconds: 300
+  # Outbound connection pool. A connection is held for the whole streamed response
+  # (seconds to minutes), so keep this well above peak concurrency.
+  downstreamConnectionLimit: 5000
+  # A request body larger than this is proxied but never resumed (it would sit in
+  # memory for the whole stream); the hard request limit is maxRequestBodyMB.
+  maxContinuationBodyMB: 10
+  maxRequestBodyMB: 100
+  # Optional: cjkCharsPerToken, otherCharsPerToken (token estimation for usage),
+  # gracefulShutdownTimeoutSeconds (unset = wait for in-flight requests indefinitely,
+  # the cap being terminationGracePeriodSeconds below). Anything else: extraEnv.
+  cjkCharsPerToken: null
+  otherCharsPerToken: null
+  gracefulShutdownTimeoutSeconds: null
+
+# Extra container env, verbatim.
+extraEnv: []
+
+port: 8000
+
+probes:
+  enabled: true        # readiness on /health (the gateway's own liveness; never calls downstream)
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+service:
+  type: ClusterIP
+  port: 8000
+
+# Rolling update keeps the old pods serving until the new ones are ready; the old
+# ones then drain (see terminationGracePeriodSeconds).
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 25%
+    maxUnavailable: 25%
+
+resources:
+  requests: { cpu: 500m, memory: 1Gi }
+  limits: { cpu: "4", memory: 32Gi }
+  # Memory grows with concurrent streams, and every resumable request keeps its parsed
+  # body in memory until its stream ends (config.maxContinuationBodyMB each), so the
+  # limit is the thing that decides whether a traffic spike is survived or OOM-kills
+  # every stream in flight -- keep it generous. The deployment this chart replaced ran
+  # requests cpu 4 / memory 16Gi and limits cpu 4 / memory 32Gi; the requests here are
+  # low only so a default install schedules anywhere, set them to what the traffic needs.
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+nameOverride: ""
+fullnameOverride: ""
+
+# The one hard cutoff: at this point the kubelet sends SIGKILL and every request still
+# streaming dies. On SIGTERM the gateway stops accepting connections and waits for
+# in-flight requests to finish, with no timeout of its own, so this has to cover the
+# longest response you expect. Streams here run for many minutes.
+terminationGracePeriodSeconds: 3600
+
+# Seconds to keep serving after the pod is told to stop, before the gateway gets
+# SIGTERM. On SIGTERM it stops accepting connections at once, but the pod leaves the
+# Service's endpoints only as fast as kube-proxy / the CNI catch up -- a few seconds --
+# and new connections still sent its way in that window are refused. openresty then
+# retries them on its next tier, which skips the gateway and the CART: no resume and
+# no prefix affinity for those requests, on every rollout and scale-down. The sleep
+# runs inside terminationGracePeriodSeconds. Uses the image's `sleep` (python:*-slim
+# has it); 0 turns it off.
+preStopSleepSeconds: 10

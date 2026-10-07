@@ -3,6 +3,12 @@
 # - LWS servce name goes to '<fullnameOverride>-leader', since the lws StatefulSet create the '<fullnameOverride>' svc
 fullnameOverride: ""
 
+# Name the engine serves (--served-model-name) and clients send. Empty means model.name.
+# Set it when the continuation gateway is on: the gateway subchart cannot read model.name,
+# so it takes the models to resume from here when config.continuationModels is empty.
+global:
+  modelName: ""
+
 # global serviceId used for modelroute, sloRequirement and scaler (with custom provider)
 # default to sglang.fullname if not set
 # each ussage is allowed to override this
@@ -573,6 +579,43 @@ cart:
   # tolerations: []
   # affinity: {}
 
+# The continuation gateway for THIS model, deployed as part of this release from the
+# vendored subchart in charts/continuation-gateway. The chain is
+#   nginx -> continuation-gateway -> CART -> engine
+# and the gateway's downstream is derived to be the CART this release deploys, so the
+# whole stack comes up from one `helm install` as long as cart.enabled is on.
+#
+# Everything below `enabled` is the subchart's own values (charts/continuation-gateway/
+# values.yaml is the documented source of truth). Off by default; set enabled: true to
+# put it in front of CART. It resumes the models named in config.continuationModels;
+# when that is empty it falls back to global.modelName (the served model name), and if
+# that is empty too the gateway just proxies.
+#
+# Enabling it RE-ROUTES this model's traffic. Besides the gateway Deployment and its
+# Service (<release>-continuation-gateway), modelRoute.yaml points spec.cart.service/port
+# at that Service instead of at the CART, so nginx's cart peer becomes the gateway and
+# every request on that peer passes through it. (The ModelRoute has no peer type for the
+# gateway; it reuses the cart peer, which is enough because the CART's worker list comes
+# from cart.outputConfigMap, not from the pods behind cart.service.) That happens only
+# when this is enabled together with cart.enabled and modelRoute.enabled; without
+# modelRoute the Service is merely deployed and clients have to be pointed at it by hand.
+# Turning it off again restores the cart peer to the CART. While it is on, the gateway
+# is on the request path of the whole model, so its replicas and resources are sized for
+# that traffic.
+continuationGateway:
+  enabled: false
+  # image:
+  #   repository: 4pdosc/continuation_gateway
+  #   tag: ""            # defaults to the subchart's appVersion
+  # config:
+  #   continuationModels: "kimi-k3"   # comma-separated string or list; overrides the global.modelName default
+  #   bufferToolCalls: true
+  #   stallIdleTimeoutSeconds: 600
+  # downstream:
+  #   url: ""                         # set only if cart.fullnameOverride / cart.service.port
+  #                                   # changed, or to point at something other than the CART
+  # resources: {}
+
 # Publish this deployment to autoconfig as a ModelRoute
 # (routing.modelsphere.dev/v1alpha1), so openresty's peers and the CART workers
 # follow the pods instead of being maintained by hand.
@@ -716,7 +759,7 @@ modelRoute:
     # REQUIRED when enabled: monitor's ConfigMap ("ns/name"), shared across
     # models with one key per model.
     outputConfigMap: ""
-    # Defaults to model.name (what the chart passes to --served-model-name).
+    # Defaults to the served model name (what the chart passes to --served-model-name).
     model: ""
     # Empty means autoconfig derives it from the node's GPU label
     # (nvidia.com/gpu.product, set by GFD). Set it only to override that, or

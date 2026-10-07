@@ -1,0 +1,11 @@
+apiVersion: v2
+name: continuation-gateway
+description: "Continuation gateway: when a streaming completion stalls or drops mid-generation, resumes it once from what the client already received, so the client sees one continuous, complete stream"
+home: https://github.com/modelsphere/helm-charts
+sources:
+  - https://github.com/modelsphere/helm-charts
+  - https://github.com/modelsphere/continuation_gateway
+type: application
+version: 0.1.0
+appVersion: "0.2.1"
+keywords: [continuation-gateway, streaming, resume]

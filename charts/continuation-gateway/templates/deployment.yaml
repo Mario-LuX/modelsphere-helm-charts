@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "continuation-gateway.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "continuation-gateway.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  strategy: {{- toYaml .Values.strategy | nindent 4 }}
+  selector:
+    matchLabels: {{- include "continuation-gateway.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "continuation-gateway.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- if .Values.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}   # The hard cutoff -- SIGKILL at this point. The gateway waits for in-flight streams on SIGTERM, so set it to the longest response you expect.
+      {{- end }}
+      containers:
+        - name: continuation-gateway
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.port }}
+              protocol: TCP
+          env:
+            - { name: PORT, value: {{ .Values.port | quote }} }
+            - { name: DOWNSTREAM_URL, value: {{ include "continuation-gateway.downstreamUrl" . | quote }} }
+            {{- with .Values.downstream.continuationUrl }}
+            - { name: CONTINUATION_URL, value: {{ . | quote }} }
+            {{- end }}
+            - { name: CONTINUATION_MODELS, value: {{ include "continuation-gateway.models" . | quote }} }
+            - { name: CONTINUATION_ENABLED, value: {{ .Values.config.continuationEnabled | quote }} }
+            - { name: BUFFER_TOOL_CALLS, value: {{ .Values.config.bufferToolCalls | quote }} }
+            - { name: STALL_IDLE_TIMEOUT_SECONDS, value: {{ .Values.config.stallIdleTimeoutSeconds | quote }} }
+            - { name: CONNECT_TIMEOUT_SECONDS, value: {{ .Values.config.connectTimeoutSeconds | quote }} }
+            - { name: DOWNSTREAM_CONNECTION_LIMIT, value: {{ .Values.config.downstreamConnectionLimit | quote }} }
+            - { name: MAX_CONTINUATION_BODY_MB, value: {{ .Values.config.maxContinuationBodyMB | quote }} }
+            - { name: MAX_REQUEST_BODY_MB, value: {{ .Values.config.maxRequestBodyMB | quote }} }
+            {{- with .Values.config.cjkCharsPerToken }}
+            - { name: CJK_CHARS_PER_TOKEN, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.config.otherCharsPerToken }}
+            - { name: OTHER_CHARS_PER_TOKEN, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.config.gracefulShutdownTimeoutSeconds }}
+            - { name: GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if .Values.probes.enabled }}
+          readinessProbe:               # the gateway's own liveness only; /health never touches the downstream
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 1
+            failureThreshold: 3
+            successThreshold: 1
+          {{- end }}
+          {{- if .Values.preStopSleepSeconds }}
+          lifecycle:
+            preStop:                    # let the endpoint removal propagate before SIGTERM; see values.yaml
+              exec:
+                command: ["sleep", {{ .Values.preStopSleepSeconds | quote }}]
+          {{- end }}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}

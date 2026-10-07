@@ -37,7 +37,7 @@
        keep an empty body. */}}
 {{- $body := $c.activeProbeBody }}
 {{- if and (not $body) (eq (upper ($c.activeProbeMethod | default "GET")) "POST") }}
-{{- $body = printf `{"model":"%s","prompt":"ping","max_tokens":1,"stream":false}` .Values.model.name }}
+{{- $body = printf `{"model":"%s","prompt":"ping","max_tokens":1,"stream":false}` (include "sglang.servedModelName" .) }}
 {{- end }}
 apiVersion: v1
 kind: ConfigMap
