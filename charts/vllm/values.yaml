@@ -1003,6 +1003,30 @@ priorityClassName: ""
 # forms of the same idea.
 nodeSelector: {}
 
+# The chart always ADDS one toleration of its own, for the taint that marks
+# accelerator nodes as compute-only:
+#
+#   nvidia.com/gpu  Exists  NoSchedule
+#
+# The engine is the workload those nodes exist for, but it had to be told, and
+# the step that taints the nodes is a separate one -- so the two were easy to get
+# out of order. The failure is quiet: nothing complains at install time, the
+# engine simply has nowhere left to schedule once its nodes are tainted, and an
+# already-running group only finds out the next time a pod is replaced.
+#
+# Harmless where no such taint exists: a toleration without a matching taint is
+# inert -- it permits scheduling onto a tainted node, it never attracts a pod to
+# one and never forces anything.
+#
+# It is added to this list rather than being its default value, because Helm
+# replaces lists wholesale: a values file setting `tolerations` for an unrelated
+# reason would otherwise drop it without saying so. To override, name the same
+# key here and your own entry wins. For example, to tolerate only the
+# compute-only value, so a node someone taints nvidia.com/gpu=broken to
+# quarantine it stays off limits:
+#
+#   tolerations:
+#     - { key: nvidia.com/gpu, operator: Equal, value: compute-only, effect: NoSchedule }
 tolerations: []
 
 affinity: {}

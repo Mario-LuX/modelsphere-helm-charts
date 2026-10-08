@@ -486,7 +486,23 @@ nodeSelector:
 affinity:
   {{- toYaml . | nindent 2 }}
 {{- end }}
-{{- with $root.Values.tolerations }}
+{{- /* The accelerator taint is tolerated by ADDING to the user's list, not by
+       defaulting the list itself: Helm replaces lists, so a values file that
+       sets `tolerations` would silently lose this entry and the engine would
+       stop being schedulable on its own tainted nodes. A user entry for the
+       same key wins, which is also how to narrow it (tolerate only
+       value=compute-only, say). There is deliberately no on/off switch: the
+       only thing one would add is no toleration at all, and a GPU engine has
+       no use for that. */}}
+{{- $tols := default (list) $root.Values.tolerations }}
+{{- $hasGpuTol := false }}
+{{- range $tols }}
+{{- if eq (.key | default "") "nvidia.com/gpu" }}{{- $hasGpuTol = true }}{{- end }}
+{{- end }}
+{{- if not $hasGpuTol }}
+{{- $tols = concat (list (dict "key" "nvidia.com/gpu" "operator" "Exists" "effect" "NoSchedule")) $tols }}
+{{- end }}
+{{- with $tols }}
 tolerations:
   {{- toYaml . | nindent 2 }}
 {{- end }}
