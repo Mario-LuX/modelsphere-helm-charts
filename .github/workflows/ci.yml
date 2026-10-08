@@ -76,6 +76,22 @@ jobs:
           done
           exit $rc
 
+  # A chart whose templates, defaults, schema or subcharts change must raise its
+  # version: release.yml skips a version that is already released and still
+  # succeeds, so an unbumped change would never be published.
+  version-bump:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Changed charts raise their version
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: hack/check-chart-version.sh "$BASE_SHA"
+
   gate:
     runs-on: ubuntu-latest
     steps:

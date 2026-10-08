@@ -18,6 +18,10 @@ the chart history is there and in `git log charts/<chart>`, not in this file.
   committed credentials.
 - Dependabot for the GitHub Actions.
 - `NOTICE` and this changelog.
+- CI fails a pull request that changes a chart's templates, `values.yaml`,
+  `values.schema.json` or vendored subcharts without raising its `Chart.yaml`
+  version (`hack/check-chart-version.sh`). Such a change would otherwise merge
+  and never be published, because release.yml skips versions already released.
 
 ### Changed
 - GitHub Actions in `check-images.yml` and `release.yml` pinned to commit SHAs.
