@@ -749,8 +749,12 @@ modelRoute:
   # or contradict it, and one that says "route to a CART" while quietly doing
   # nothing (because none was deployed) is worse than not having it.
   cart:
-    # Per-worker max_load.
-    maxLoad: 20
+    # Per-worker max_load: the in-flight requests CART lets one engine have before it
+    # skips that engine, answering 503 once every engine is skipped. Set far above any
+    # real concurrency so admission stays with openresty (each peer's maxConcurrency
+    # and adaptive concurrency): a low cap here sheds load first, and openresty then
+    # retries those requests on the next tier, past CART and its prefix affinity.
+    maxLoad: 1000
 
   # Write these backends into monitor's config as well. Monitor reloads it every
   # 60s on its own, so no sidecar is involved.
