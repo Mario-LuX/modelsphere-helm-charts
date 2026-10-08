@@ -239,6 +239,27 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/cart-0.2.0/cart-0.2.0.tgz
     version: 0.2.0
+  continuation-gateway:
+  - apiVersion: v2
+    appVersion: 0.2.2
+    created: "2026-10-08T08:46:46.137137197Z"
+    description: 'Continuation gateway: when a streaming completion stalls or drops
+      mid-generation, resumes it once from what the client already received, so the
+      client sees one continuous, complete stream'
+    digest: d1262b11942dc847bf3249abd2d8362611ff67dc9e856cb340c42a0b8fd32575
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - continuation-gateway
+    - streaming
+    - resume
+    name: continuation-gateway
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/modelsphere/continuation_gateway
+    type: application
+    urls:
+    - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/continuation-gateway-0.1.1/continuation-gateway-0.1.1.tgz
+    version: 0.1.1
   llm-slo-decision-gen:
   - apiVersion: v2
     appVersion: 0.7.0
@@ -527,6 +548,30 @@ entries:
   sglang:
   - apiVersion: v2
     appVersion: 1.0.0
+    created: "2026-10-08T08:46:46.372653459Z"
+    dependencies:
+    - condition: cart.enabled
+      name: cart
+      repository: file://../cart
+      version: 0.2.2
+    - alias: continuationGateway
+      condition: continuationGateway.enabled
+      name: continuation-gateway
+      repository: file://../continuation-gateway
+      version: 0.1.1
+    description: SGLang inference deployment -- single-node or multi-node (LeaderWorkerSet),
+      with optional cache-aware routing, autoscaling and hang detection
+    digest: 47d467862b0c6e2d9f9d902aa045a6a4d22609344410e268fbf0dde60f64c052
+    home: https://github.com/modelsphere/helm-charts
+    name: sglang
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    type: application
+    urls:
+    - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/sglang-0.8.11/sglang-0.8.11.tgz
+    version: 0.8.11
+  - apiVersion: v2
+    appVersion: 1.0.0
     created: "2026-10-06T02:17:54.641822476Z"
     dependencies:
     - condition: cart.enabled
@@ -813,6 +858,25 @@ entries:
   vllm:
   - apiVersion: v2
     appVersion: 1.0.0
+    created: "2026-10-08T08:46:46.62259056Z"
+    dependencies:
+    - condition: cart.enabled
+      name: cart
+      repository: file://../cart
+      version: 0.2.2
+    description: vLLM inference deployment -- single-node or multi-node (LeaderWorkerSet),
+      with optional cache-aware routing, autoscaling and hang detection
+    digest: bd8cd6d913bca5c238b43986f53128011a58b03f9462026a1de12d7aa0a19f58
+    home: https://github.com/modelsphere/helm-charts
+    name: vllm
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    type: application
+    urls:
+    - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/vllm-0.7.6/vllm-0.7.6.tgz
+    version: 0.7.6
+  - apiVersion: v2
+    appVersion: 1.0.0
     created: "2026-10-06T02:17:54.903343668Z"
     dependencies:
     - condition: cart.enabled
@@ -1077,4 +1141,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-10-06T02:17:54.903547133Z"
+generated: "2026-10-08T08:46:46.622786022Z"
