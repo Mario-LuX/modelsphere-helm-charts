@@ -33,7 +33,7 @@ spec:
             {{- with .Values.downstream.continuationUrl }}
             - { name: CONTINUATION_URL, value: {{ . | quote }} }
             {{- end }}
-            - { name: CONTINUATION_MODELS, value: {{ include "continuation-gateway.models" . | quote }} }
+            - { name: CONTINUATION_MODEL, value: {{ include "continuation-gateway.model" . | quote }} }
             - { name: CONTINUATION_ENABLED, value: {{ .Values.config.continuationEnabled | quote }} }
             - { name: BUFFER_TOOL_CALLS, value: {{ .Values.config.bufferToolCalls | quote }} }
             - { name: STALL_IDLE_TIMEOUT_SECONDS, value: {{ .Values.config.stallIdleTimeoutSeconds | quote }} }

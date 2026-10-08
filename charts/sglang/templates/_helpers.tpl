@@ -30,13 +30,6 @@
 {{- .Values.fullnameOverride | default .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- /* The name the engine serves and clients send: global.modelName, else model.name.
-       global.modelName is what the continuation-gateway subchart falls back to for
-       config.continuationModels, since a subchart cannot read the parent's model.name. */ -}}
-{{- define "sglang.servedModelName" -}}
-{{- (.Values.global | default dict).modelName | default .Values.model.name -}}
-{{- end -}}
-
 {{- define "sglang.serviceId" -}}
 {{- $id := .Values.serviceId | default (include "sglang.fullname" .) -}}
 {{- $id -}}

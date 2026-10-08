@@ -5,7 +5,7 @@ home: https://github.com/modelsphere/helm-charts
 sources:
   - https://github.com/modelsphere/helm-charts
 type: application
-version: 0.8.10
+version: 0.8.11
 appVersion: "1.0.0"
 
 # CART is vendored under charts/cart -- already present, so no `helm dependency
@@ -35,7 +35,7 @@ dependencies:
   # (see charts/continuation-gateway/values.yaml). `alias` gives the values key a
   # camelCase name -- a hyphenated one cannot be written as .Values.continuation-gateway.
   - name: continuation-gateway
-    version: 0.1.0
+    version: 0.1.1
     repository: "file://../continuation-gateway"
     alias: continuationGateway
     condition: continuationGateway.enabled

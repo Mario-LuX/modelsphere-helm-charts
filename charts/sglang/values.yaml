@@ -3,12 +3,6 @@
 # - LWS servce name goes to '<fullnameOverride>-leader', since the lws StatefulSet create the '<fullnameOverride>' svc
 fullnameOverride: ""
 
-# Name the engine serves (--served-model-name) and clients send. Empty means model.name.
-# Set it when the continuation gateway is on: the gateway subchart cannot read model.name,
-# so it takes the models to resume from here when config.continuationModels is empty.
-global:
-  modelName: ""
-
 # global serviceId used for modelroute, sloRequirement and scaler (with custom provider)
 # default to sglang.fullname if not set
 # each ussage is allowed to override this
@@ -587,9 +581,9 @@ cart:
 #
 # Everything below `enabled` is the subchart's own values (charts/continuation-gateway/
 # values.yaml is the documented source of truth). Off by default; set enabled: true to
-# put it in front of CART. It resumes the models named in config.continuationModels;
-# when that is empty it falls back to global.modelName (the served model name), and if
-# that is empty too the gateway just proxies.
+# put it in front of CART. config.continuationModel is REQUIRED when it is enabled: the
+# real model this release serves (not the --served-model-name clients send), as a single
+# string. Every request through the gateway is resumed according to it.
 #
 # Enabling it RE-ROUTES this model's traffic. Besides the gateway Deployment and its
 # Service (<release>-continuation-gateway), modelRoute.yaml points spec.cart.service/port
@@ -608,7 +602,7 @@ continuationGateway:
   #   repository: 4pdosc/continuation_gateway
   #   tag: ""            # defaults to the subchart's appVersion
   # config:
-  #   continuationModels: "kimi-k3"   # comma-separated string or list; overrides the global.modelName default
+  #   continuationModel: "kimi-k3"    # REQUIRED when enabled: the real model, one string
   #   bufferToolCalls: true
   #   stallIdleTimeoutSeconds: 600
   # downstream:
@@ -763,7 +757,7 @@ modelRoute:
     # REQUIRED when enabled: monitor's ConfigMap ("ns/name"), shared across
     # models with one key per model.
     outputConfigMap: ""
-    # Defaults to the served model name (what the chart passes to --served-model-name).
+    # Defaults to model.name (what the chart passes to --served-model-name).
     model: ""
     # Empty means autoconfig derives it from the node's GPU label
     # (nvidia.com/gpu.product, set by GFD). Set it only to override that, or

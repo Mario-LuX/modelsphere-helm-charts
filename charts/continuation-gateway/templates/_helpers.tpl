@@ -40,12 +40,15 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
-{{/* Models that get resume behaviour, as the comma-separated string the gateway reads:
-     config.continuationModels, else global.modelName (set by the parent chart, e.g.
-     sglang), else empty. config.continuationModels may be written as a string
-     ("a,b") or a list ([a, b]); a list is joined, because passing it through as-is
-     would render "[a b]" and the gateway would silently match no model. */}}
-{{- define "continuation-gateway.models" -}}
-{{- $m := .Values.config.continuationModels | default (.Values.global | default dict).modelName | default "" -}}
-{{- if kindIs "slice" $m }}{{ join "," $m }}{{ else }}{{ $m }}{{ end -}}
+{{/* The model this release serves, as the single string the gateway reads
+     (CONTINUATION_MODEL). Required: with it unset the gateway resumes nothing, which
+     would leave a deployed gateway that silently does no work. Anything but a string
+     is rejected, because a list passed through as-is would render "[a b]" and select
+     no model. */}}
+{{- define "continuation-gateway.model" -}}
+{{- $m := .Values.config.continuationModel | default "" -}}
+{{- if not (kindIs "string" $m) -}}
+{{- fail "config.continuationModel must be a single string, e.g. kimi-k3" -}}
+{{- end -}}
+{{- required "config.continuationModel is required: set it to the model this release serves, e.g. --set continuationGateway.config.continuationModel=kimi-k3" $m -}}
 {{- end -}}

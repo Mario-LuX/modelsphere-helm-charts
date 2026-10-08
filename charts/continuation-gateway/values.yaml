@@ -33,13 +33,14 @@ downstream:
 # Each value maps to the environment variable of the same name in upper snake case;
 # defaults and the full semantics live in continuation_gateway/config.py.
 config:
-  # Models that get resume behaviour, matched against the request's `model` field
-  # (case-insensitive). A comma-separated string like the gateway's CONTINUATION_MODELS,
-  # or a list. Empty falls back to global.modelName, which the parent chart sets to the
-  # engine's served model name (sglang does); if that is empty too, NOTHING is resumed
-  # and the gateway only proxies. Set it explicitly when the name clients send is not
-  # the one the engine was started with.
-  continuationModels: ""        # e.g. "kimi-k3,kimi-k3-0905" or [kimi-k3, kimi-k3-0905]
+  # REQUIRED. The model this release actually serves -- the one the weights belong
+  # to -- as a single string (case-insensitive); it selects how the gateway rebuilds
+  # the partial reply for the resume request (the gateway's CONTINUATION_MODEL). It is
+  # NOT the name clients send: the engine's --served-model-name is free-form and may
+  # differ from the real model, and the gateway does not look at the request's `model`
+  # field. Every request through the gateway is resumed the same way, so one release
+  # (one namespace) is expected to serve one model.
+  continuationModel: ""         # e.g. "kimi-k3"
   # false = watch and log, but never send the second request. For checking the
   # detection path without putting real resume load on the downstream.
   continuationEnabled: true

@@ -6,17 +6,8 @@ Downstream:  {{ include "continuation-gateway.downstreamUrl" . }}
 {{- with .Values.downstream.continuationUrl }}
 Resume leg:  {{ . }}
 {{- end }}
-{{- $models := include "continuation-gateway.models" . }}
-{{- if not $models }}
 
-WARNING: config.continuationModels and global.modelName are both empty, so no request is ever resumed -- the
-gateway only proxies. Set it to the model names clients send, e.g.
-
-  --set config.continuationModels=kimi-k3
-{{- else }}
-
-Resumes streams for: {{ $models }}{{ if not .Values.config.continuationEnabled }}  (continuationEnabled=false: detect and log only){{ end }}
-{{- end }}
+Resumes every stream as model: {{ include "continuation-gateway.model" . }}{{ if not .Values.config.continuationEnabled }}  (continuationEnabled=false: detect and log only){{ end }}
 
 Configuration is environment variables, so a change needs a rollout; the pods keep
 no state, so that is an ordinary rolling update. The gateway sits in FRONT of the
