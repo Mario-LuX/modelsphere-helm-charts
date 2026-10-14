@@ -52,3 +52,13 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- required "config.continuationModel is required: set it to the model this release serves, e.g. --set continuationGateway.config.continuationModel=kimi-k3" $m -}}
 {{- end -}}
+
+{{/* The inference engine behind the downstream (CONTINUATION_ENGINE). Checked here so
+     a typo fails the render instead of the gateway pod's start-up. */}}
+{{- define "continuation-gateway.engine" -}}
+{{- $e := .Values.config.continuationEngine | default "sglang" | toString | lower -}}
+{{- if not (has $e (list "sglang" "vllm")) -}}
+{{- fail (printf "config.continuationEngine must be sglang or vllm, got %q" $e) -}}
+{{- end -}}
+{{- $e -}}
+{{- end -}}

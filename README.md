@@ -30,11 +30,14 @@ helm search repo modelsphere
 Installing either of them gives you an engine and a router that already know
 about each other.
 
-`sglang` also pulls in `continuation-gateway` as a subchart, gated on
+`sglang` and `vllm` also pull in `continuation-gateway` as a subchart, gated on
 `continuationGateway.enabled` (off by default). Enabled, it sits in front of the
 model's `cart`; see the comment above `continuationGateway` in
-[`charts/sglang/values.yaml`](charts/sglang/values.yaml) for what that changes
-in the route.
+[`charts/sglang/values.yaml`](charts/sglang/values.yaml) or
+[`charts/vllm/values.yaml`](charts/vllm/values.yaml) for what that changes in the
+route. Each chart sets the gateway's `config.continuationEngine` to its own engine.
+Which engine + model combinations the gateway has been verified on is listed in the
+[continuation_gateway](https://github.com/modelsphere/continuation_gateway) README.
 
 ## Quick start
 

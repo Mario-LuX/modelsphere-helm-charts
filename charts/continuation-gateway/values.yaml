@@ -41,6 +41,10 @@ config:
   # field. Every request through the gateway is resumed the same way, so one release
   # (one namespace) is expected to serve one model.
   continuationModel: ""         # e.g. "kimi-k3"
+  # The inference engine behind the downstream: "sglang" or "vllm" (the gateway's
+  # CONTINUATION_ENGINE). The sglang and vllm charts set it for you. See the
+  # continuation_gateway README for the engine + model combinations that are verified.
+  continuationEngine: sglang
   # false = watch and log, but never send the second request. For checking the
   # detection path without putting real resume load on the downstream.
   continuationEnabled: true

@@ -775,6 +775,8 @@ cart:
 # that traffic.
 continuationGateway:
   enabled: false
+  config:
+    continuationEngine: sglang        # the engine this chart deploys; leave as is
   # image:
   #   repository: 4pdosc/continuation_gateway
   #   tag: ""            # defaults to the subchart's appVersion

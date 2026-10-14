@@ -846,6 +846,45 @@ cart:
   # tolerations: []
   # affinity: {}
 
+# The continuation gateway for THIS model, deployed as part of this release from the
+# vendored subchart in charts/continuation-gateway. The chain is
+#   nginx -> continuation-gateway -> CART -> engine
+# and the gateway's downstream is derived to be the CART this release deploys, so the
+# whole stack comes up from one `helm install` as long as cart.enabled is on.
+#
+# Everything below `enabled` is the subchart's own values (charts/continuation-gateway/
+# values.yaml is the documented source of truth). Off by default; set enabled: true to
+# put it in front of CART. config.continuationModel is REQUIRED when it is enabled: the
+# real model this release serves (not the --served-model-name clients send), as a single
+# string. Every request through the gateway is resumed according to it.
+#
+# Enabling it RE-ROUTES this model's traffic. Besides the gateway Deployment and its
+# Service (<release>-continuation-gateway), modelRoute.yaml points spec.cart.service/port
+# at that Service instead of at the CART, so nginx's cart peer becomes the gateway and
+# every request on that peer passes through it. (The ModelRoute has no peer type for the
+# gateway; it reuses the cart peer, which is enough because the CART's worker list comes
+# from cart.outputConfigMap, not from the pods behind cart.service.) That happens only
+# when this is enabled together with cart.enabled and modelRoute.enabled; without
+# modelRoute the Service is merely deployed and clients have to be pointed at it by hand.
+# Turning it off again restores the cart peer to the CART. While it is on, the gateway
+# is on the request path of the whole model, so its replicas and resources are sized for
+# that traffic.
+continuationGateway:
+  enabled: false
+  config:
+    continuationEngine: vllm        # the engine this chart deploys; leave as is
+  # image:
+  #   repository: 4pdosc/continuation_gateway
+  #   tag: ""            # defaults to the subchart's appVersion
+  # config:
+  #   continuationModel: "glm-5.3"    # REQUIRED when enabled: the real model, one string
+  #   bufferToolCalls: true
+  #   stallIdleTimeoutSeconds: 600
+  # downstream:
+  #   url: ""                         # set only if cart.fullnameOverride / cart.service.port
+  #                                   # changed, or to point at something other than the CART
+  # resources: {}
+
 # Publish this deployment to autoconfig as a ModelRoute
 # (routing.modelsphere.dev/v1alpha1), so openresty's peers and the CART workers
 # follow the pods instead of being maintained by hand.

@@ -34,6 +34,7 @@ spec:
             - { name: CONTINUATION_URL, value: {{ . | quote }} }
             {{- end }}
             - { name: CONTINUATION_MODEL, value: {{ include "continuation-gateway.model" . | quote }} }
+            - { name: CONTINUATION_ENGINE, value: {{ include "continuation-gateway.engine" . | quote }} }
             - { name: CONTINUATION_ENABLED, value: {{ .Values.config.continuationEnabled | quote }} }
             - { name: BUFFER_TOOL_CALLS, value: {{ .Values.config.bufferToolCalls | quote }} }
             - { name: STALL_IDLE_TIMEOUT_SECONDS, value: {{ .Values.config.stallIdleTimeoutSeconds | quote }} }

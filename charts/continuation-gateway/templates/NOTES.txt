@@ -7,7 +7,7 @@ Downstream:  {{ include "continuation-gateway.downstreamUrl" . }}
 Resume leg:  {{ . }}
 {{- end }}
 
-Resumes every stream as model: {{ include "continuation-gateway.model" . }}{{ if not .Values.config.continuationEnabled }}  (continuationEnabled=false: detect and log only){{ end }}
+Resumes every stream as model: {{ include "continuation-gateway.model" . }} (engine: {{ include "continuation-gateway.engine" . }}){{ if not .Values.config.continuationEnabled }}  (continuationEnabled=false: detect and log only){{ end }}
 
 Configuration is environment variables, so a change needs a rollout; the pods keep
 no state, so that is an ordinary rolling update. The gateway sits in FRONT of the

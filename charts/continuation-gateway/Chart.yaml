@@ -6,6 +6,6 @@ sources:
   - https://github.com/modelsphere/helm-charts
   - https://github.com/modelsphere/continuation_gateway
 type: application
-version: 0.1.1
-appVersion: "0.2.2"
+version: 0.1.2
+appVersion: "0.2.3"
 keywords: [continuation-gateway, streaming, resume]
