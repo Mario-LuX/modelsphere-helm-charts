@@ -1,0 +1,37 @@
+LLM Benchmark Platform installed!
+
+Release: {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+
+Services:
+  Backend:  {{ include "llm-bench.fullname" . }}-backend:8000
+  Frontend: {{ include "llm-bench.fullname" . }}-frontend:80
+  Worker:   {{ include "llm-bench.fullname" . }}-worker (Dramatiq)
+  Postgres: {{ include "llm-bench.postgresql.fullname" . }}:5432
+  Redis:    {{ include "llm-bench.redis.fullname" . }}:6379
+
+{{- if .Values.ingress.enabled }}
+Ingress:
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else if eq .Values.service.frontend.type "NodePort" }}
+
+The frontend is on a NodePort of every node:
+  kubectl get svc -n {{ .Release.Namespace }} {{ include "llm-bench.fullname" . }}-frontend -o jsonpath='{.spec.ports[0].nodePort}'
+
+Then open http://<node address>:<that port>
+{{- else }}
+
+No ingress enabled. Access the frontend via port-forward:
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "llm-bench.fullname" . }}-frontend 8080:80
+
+Then open http://localhost:8080
+{{- end }}
+
+{{- if not .Values.datasets.enabled }}
+
+Every module runs on the example data inside the image. For the academic
+suites or your own replay captures, add a datasets volume (datasets.enabled);
+see docs/deploying.md.
+{{- end }}

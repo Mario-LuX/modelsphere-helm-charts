@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "llm-bench.fullname" . }}-frontend
+  labels:
+    {{- include "llm-bench.labels" . | nindent 4 }}
+data:
+  default.conf: |
+    server {
+        listen 80;
+        server_name localhost;
+        root /usr/share/nginx/html;
+        index index.html;
+
+        gzip on;
+        gzip_vary on;
+        gzip_min_length 1024;
+        gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+
+        location /api/ {
+            proxy_pass http://{{ include "llm-bench.fullname" . }}-backend:8000/;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+
+        # Frozen dataset imports and downloads: files of gigabytes. No body
+        # limit (the backend enforces REPLAY_IMPORT_MAX_GB) and no buffering,
+        # so an upload streams to the backend rather than into temp files.
+        location /api/replay-datasets/frozen/ {
+            proxy_pass http://{{ include "llm-bench.fullname" . }}-backend:8000/replay-datasets/frozen/;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            client_max_body_size 0;
+            proxy_request_buffering off;
+            proxy_buffering off;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+        }
+
+        location /health {
+            access_log off;
+            return 200 "healthy\n";
+            add_header Content-Type text/plain;
+        }
+
+        # Vite emits content-hashed asset filenames, so a given URL's bytes
+        # never change — cache them hard.
+        #
+        # `=404` is the load-bearing part. During a rolling update a browser
+        # holding the previous index.html requests chunks that a new pod does
+        # not have. Falling through to the SPA handler below would serve
+        # index.html with HTTP 200 and Content-Type text/html, which the
+        # browser's module loader rejects as an unrecoverable MIME error. A
+        # real 404 is what lets the app's vite:preloadError handler notice and
+        # reload onto the new bundle.
+        location /assets/ {
+            try_files $uri =404;
+            add_header Cache-Control "public, max-age=31536000, immutable";
+        }
+
+        # These two must never be served stale: with no explicit directive
+        # browsers apply heuristic caching and can boot the old bundle (or
+        # report the old SHA on /admin/version) long after a rollout.
+        location = /index.html {
+            add_header Cache-Control "no-cache";
+        }
+
+        location = /build-info.json {
+            add_header Cache-Control "no-cache";
+        }
+
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+    }

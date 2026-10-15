@@ -1,0 +1,42 @@
+{{- $fullName := include "llm-autotune.fullname" . -}}
+# create-or-migrate (app/db/bootstrap.py): a fresh database gets the current
+# schema and a stamp; an existing one is upgraded. Then it seeds what a fresh
+# install needs (the first admin, the built-in objectives, the local cluster)
+# and creates the screen benchmark on LLMBench. Runs once the release's
+# objects exist, on every install and upgrade; the worker waits for the schema
+# rather than starting against one it does not understand. On an upgrade the
+# schema is already migrated by then (schema-job.yaml), and this only seeds.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullName }}-migrate
+  labels: {{- include "llm-autotune.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        {{- include "llm-autotune.labels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "llm-autotune.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: migrate
+          image: {{ include "llm-autotune.backendImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "app.db.bootstrap"]
+          {{- include "llm-autotune.env" . | nindent 10 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}

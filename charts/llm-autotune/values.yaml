@@ -1,0 +1,231 @@
+# LLM AutoTune — one release brings up the API, the worker, the UI and their
+# datastores. Everything below has a working default except `jwtSecret`, which
+# you must set, and `adminPassword`, without which no account is created.
+#
+#   helm install autotune modelsphere/llm-autotune \
+#     --set jwtSecret=$(openssl rand -hex 32) --set adminPassword=...
+#
+# deploy/quickstart.sh installs it next to LLMBench in one command. For a
+# try-out on a cluster without GPUs, add `-f values-demo.yaml` (deploy/demo.sh).
+#
+# Paths named in this chart's comments -- deploy/*, scripts/*, docs/* -- are in
+# the llm-autotune project repository (`home` in Chart.yaml), which is where the
+# chart is maintained and copied here from. They are not paths in this one.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  registry: docker.io/4pdosc
+  backend: llm-autotune-backend
+  frontend: llm-autotune-frontend
+  tag: ""                      # empty = the chart's appVersion
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+# REQUIRED. Sign-in tokens are minted with this, and it also encrypts the
+# kubeconfigs you paste in for GPU clusters — rotating it logs everyone out and
+# makes stored kubeconfigs unreadable.
+jwtSecret: ""
+
+# The first admin, created only when the users table is empty. Leave the
+# password empty and no account is made; you then create one another way.
+adminUsername: admin
+adminPassword: ""
+
+# Whether the sign-in page offers "Create account" to anyone who can reach it.
+# false: an admin adds users on the Account page.
+allowSignup: true
+
+# Both are used to build links handed to other systems, so they must be
+# addresses those systems can reach, not cluster-internal names.
+#   publicApiUrl — how a POLICY CONTAINER on a GPU machine calls home.
+#                  Required for policy campaigns. With gpuCluster.inCluster,
+#                  empty means the API's in-cluster address, which a policy
+#                  running in this cluster can reach.
+#   publicUiUrl  — how a PERSON's browser reaches the UI.
+publicApiUrl: ""
+publicUiUrl: ""
+
+# Browser origins allowed to call the API. "*" is right when the UI is served
+# from this same ingress, which is the default.
+corsOrigins: "*"
+
+# Any other platform setting, as plain k8s env entries for the API, the worker
+# and the migrate job: every AUTOTUNE_* variable in backend/app/core/config.py
+# (docs/deploying.md#other-settings lists the ones installs usually need).
+# Take secrets from a Secret, not a literal:
+#   extraEnv:
+#     - name: AUTOTUNE_DEFAULT_DAILY_START
+#       value: "23:00"
+#     - name: AUTOTUNE_LLMBENCH_API_KEY
+#       valueFrom: {secretKeyRef: {name: autotune-llmbench, key: api-key}}
+extraEnv: []
+
+# The cluster's DNS domain. The UI's nginx resolves the API service by its fully
+# qualified name (nginx's resolver ignores resolv.conf search domains), so
+# change this only if your cluster does not use the default.
+clusterDomain: cluster.local
+
+# Where every pod of this release may land: the API, worker, UI, datastores
+# and the migrate job. A component's own `nodeSelector` / `tolerations` below
+# overrides these for that component. Runs are placed by the GPU cluster
+# settings (gpuCluster.nodeSelector), not by these.
+nodeSelector: {}
+tolerations: []
+
+api:
+  replicas: 1
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+worker:
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # An ssh identity the worker uses to reach bare-metal GPU boxes (the
+  # `ssh_docker` driver). Leave disabled for a k8s-only fleet.
+  ssh:
+    enabled: false
+    # Name of an existing Secret holding the private key (and optionally
+    # known_hosts). Create it yourself — a key does not belong in values.yaml:
+    #   kubectl create secret generic autotune-worker-ssh \
+    #     --from-file=id_ed25519=$HOME/.ssh/id_ed25519
+    existingSecret: ""
+
+frontend:
+  replicas: 1
+  resources: {}
+  # How the UI is reached without an ingress: NodePort opens it on every
+  # node's address. nodePort empty lets Kubernetes pick a free one.
+  service:
+    type: ClusterIP
+    nodePort: ""
+
+# Complete engine logs as files: the worker writes them, the API serves them.
+# Two pods, one volume, so it wants ReadWriteMany. Without an RWX class, set
+# enabled=false: the UI still shows each log's end (kept in the database) and
+# a running engine's log (read from the cluster).
+runLogs:
+  enabled: true
+  size: 5Gi
+  storageClass: ""
+
+postgresql:
+  enabled: true                # false = bring your own, via externalDatabase
+  # The host is named, so the address is complete wherever it is read: tooling
+  # that collects images from a render (offline bundles, mirror configuration)
+  # has to special-case a bare `postgres:16-alpine` to know it means docker.io.
+  # The llm-bench chart names it too.
+  image: docker.io/library/postgres:16-alpine
+  user: autotune
+  database: autotune
+  password: autotune           # change it, or use existingSecret below
+  existingSecret: ""           # a Secret with key POSTGRES_PASSWORD
+  storage:
+    # false = an emptyDir: the database is lost when the pod restarts. Right
+    # for a trial, and for a cluster whose storage class is too slow for a
+    # Postgres initdb (network filesystems can take half an hour).
+    enabled: true
+    size: 20Gi
+    storageClass: ""
+  resources: {}
+
+externalDatabase:
+  # Used when postgresql.enabled=false. Both DSNs, because the API is async and
+  # the worker and migrations are not.
+  asyncUrl: ""                 # postgresql+asyncpg://user:pass@host:5432/db
+  syncUrl: ""                  # postgresql+psycopg2://user:pass@host:5432/db
+
+# The benchmark platform every run is measured by. Point this at your LLMBench
+# deployment. `mock.enabled` (values-mock.yaml) replaces it with a fake for a
+# GPU-free trial.
+llmbench:
+  # How this platform's pods reach LLMBench's API, e.g. the backend service
+  # http://llm-bench-backend.llm-bench:8000 when both run in one cluster.
+  url: ""
+  # Where people open LLMBench in a browser (links in reports). Empty = url.
+  webUrl: ""
+  # The service-account key LLMBench was installed with (its
+  # secrets.serviceApiKey). See LLMBench's docs/deploying.md.
+  apiKey: ""
+  email: ""
+  password: ""
+  benchmarkSlug: autotune-screen-v1
+  # The VictoriaLogs store of the gateway's request logs that replay datasets
+  # are collected from (Automatic Tuning > Datasets), as LLMBench's pods reach
+  # it. The default is where the modelsphere install flow puts the
+  # bodylog-victorialogs chart: namespace `llm-route`, next to bodylog itself,
+  # under the Service name that chart pins. Installed anywhere else, only the
+  # namespace changes. Empty = the dataset form asks.
+  # LLMBench needs its collector on: datasets.enabled and datasetBuilder.enabled.
+  victoriaLogsUrl: "http://victorialogs.llm-route:9428"
+
+# The GPU cluster runs land on.
+gpuCluster:
+  # true = the cluster this release is installed into. The chart then grants
+  # its ServiceAccount the RBAC the launch driver needs and the platform talks
+  # to the local API server. false = register clusters from the Resources page
+  # by uploading the scoped kubeconfig deploy/gpu-cluster.sh writes.
+  inCluster: false
+  # Let the platform list pods in every namespace, to show how many cards other
+  # workloads leave free on each node. Off by default: a pod listing includes
+  # other teams' pod specs (their environment variables among them). Without
+  # it the free count reads "unknown"; nothing else depends on it.
+  countFreeCards: false
+  # Where engine pods go. Empty = this release's namespace.
+  namespace: ""
+  # "deployment" = a Deployment + NodePort Service, which works on any cluster.
+  # "custom" = a TuningRun for the autotune operator to reconcile.
+  workloadKind: deployment
+  gpuResource: nvidia.com/gpu
+  runtimeClass: nvidia
+  # GPU nodes are commonly tainted so that pods with no use for cards keep off
+  # them; a run's pod tolerates that taint by default.
+  tolerateGpuTaint: true
+  nodeSelector: ""             # comma-separated label=value pairs
+  # Model weights. Empty = a per-node hostPath at the campaign's model path.
+  modelPvc: ""
+  modelPvcRoot: ""
+  shmSizeMb: 2048
+  # On an empty install, register this cluster as a machine pool automatically
+  # so the first campaign has somewhere to run.
+  autoRegister: true
+
+# The k8s operator (optional). With it, a run is a TuningRun the operator
+# reconciles instead of a Deployment the platform manages directly.
+operator:
+  enabled: false
+
+ingress:
+  enabled: false
+  className: ""
+  host: autotune.example.com
+  annotations: {}
+  tls: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# A fake benchmark platform in place of LLMBench, for trying AutoTune on its
+# own. See values-mock.yaml.
+mock:
+  enabled: false
+
+# A placeholder weights directory on every node, for the mock engine. The
+# platform refuses to start an engine on an empty model directory, and the
+# mock loads nothing, so one small file is all it needs. A DaemonSet writes it
+# (and so pulls the mock engine image onto each node ahead of the first run).
+# On in values-demo.yaml; leave it off on a GPU cluster.
+mockModel:
+  enabled: false
+  path: /var/lib/llm-autotune/mock-model
+  # The mock engine image. Empty = llm-autotune-mock-engine:<appVersion>, the
+  # name deploy/demo.sh builds it under from mock-engine/ and loads into
+  # the cluster; no image of it is published.
+  image: ""

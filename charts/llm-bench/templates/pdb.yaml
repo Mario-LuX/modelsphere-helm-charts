@@ -1,0 +1,31 @@
+{{- if and .Values.pdb.enabled (gt (.Values.replicaCount.backend | int) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "llm-bench.fullname" . }}-backend
+  labels:
+    {{- include "llm-bench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "llm-bench.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: backend
+{{- end }}
+---
+{{- if and .Values.pdb.enabled (gt (.Values.replicaCount.worker | int) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "llm-bench.fullname" . }}-worker
+  labels:
+    {{- include "llm-bench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "llm-bench.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+{{- end }}

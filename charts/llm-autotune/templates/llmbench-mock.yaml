@@ -1,0 +1,56 @@
+{{- if .Values.mock.enabled }}
+{{- $fullName := include "llm-autotune.fullname" . -}}
+# A fake benchmark platform, for proving the loop with no GPUs and no LLMBench.
+# It really does call the endpoint under test before reporting its numbers, so
+# an unreachable or broken engine fails the submission exactly as the real one
+# would — what it does not do is measure anything.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullName }}-llmbench-mock
+  labels: {{- include "llm-autotune.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: llmbench-mock
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullName }}-llmbench-mock
+  labels: {{- include "llm-autotune.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: llmbench-mock
+  template:
+    metadata:
+      labels:
+        {{- include "llm-autotune.stableLabels" . | nindent 8 }}
+        app.kubernetes.io/component: llmbench-mock
+    spec:
+      containers:
+        - name: llmbench-mock
+          image: {{ include "llm-autotune.backendImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - uvicorn
+            - app.mocks.llmbench_mock:app
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8000"
+          ports:
+            - containerPort: 8000
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -1,0 +1,17 @@
+{{- if .Values.datasets.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "llm-bench.fullname" . }}-datasets
+  labels:
+    {{- include "llm-bench.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.datasets.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.datasets.size }}
+  {{- if .Values.datasets.storageClass }}
+  storageClassName: {{ .Values.datasets.storageClass | quote }}
+  {{- end }}
+{{- end }}

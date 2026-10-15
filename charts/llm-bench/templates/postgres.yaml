@@ -1,0 +1,168 @@
+{{- if .Values.postgres.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "llm-bench.fullname" . }}-postgres
+  labels:
+    {{- include "llm-bench.labels" . | nindent 4 }}
+  # Keep the postgres data volume across helm uninstall. Without this, an
+  # accidental `helm uninstall` deletes the PVC and silently destroys all
+  # platform data. After uninstall+reinstall you must re-adopt the PVC by
+  # patching the helm release-name/namespace labels — see docs/deploying.md.
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.postgres.persistence.size }}
+  {{- if .Values.postgres.persistence.storageClass }}
+  storageClassName: {{ .Values.postgres.persistence.storageClass | quote }}
+  {{- end }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llm-bench.fullname" . }}-postgres
+  labels:
+    {{- include "llm-bench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  replicas: 1
+  # Recreate, NOT the default RollingUpdate. This is a single replica bound to an
+  # RWO PVC: a rolling update would try to start the new pod (maxSurge 25% -> 1)
+  # while the old one still holds PGDATA, so two postgres processes would contend
+  # for the same data directory. postmaster.pid makes the second refuse to start
+  # rather than corrupt anything, so the practical symptom is a wedged rollout
+  # (new pod CrashLooping / stuck ContainerCreating on multi-attach) instead of
+  # data loss -- but there is no reason to court it. Recreate stops the old pod
+  # first, at the cost of a short gap in DB availability during a postgres
+  # upgrade, which is correct for an un-replicated database.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "llm-bench.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: postgres
+  template:
+    metadata:
+      labels:
+        {{- include "llm-bench.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: "{{ .Values.postgres.image.registry }}/{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+          imagePullPolicy: {{ .Values.image.backend.pullPolicy }}
+          # The data lives one level below the mount point: a freshly formatted
+          # block volume (ext4 on Ceph RBD, EBS, a PD) has lost+found at its
+          # root, and initdb refuses a non-empty directory. A database already
+          # initialised at the root, by an earlier version of this chart, stays
+          # where it is. docker-entrypoint.sh still runs initdb/startup, then
+          # execs the server with our tuning.
+          command: ["sh", "-c"]
+          args:
+            - |
+              if [ -s /var/lib/postgresql/data/PG_VERSION ]; then
+                export PGDATA=/var/lib/postgresql/data
+              else
+                export PGDATA=/var/lib/postgresql/data/pgdata
+              fi
+              exec docker-entrypoint.sh postgres -c max_connections={{ .Values.postgres.maxConnections }}
+          env:
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.database | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.username | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "llm-bench.fullname" . }}
+                  key: POSTGRES_PASSWORD
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          # Crash recovery after an unclean stop (eviction, OOM, node reboot) replays
+          # WAL, which on network storage has been seen to
+          # take ~50s. Without a startupProbe the liveness probe kills postgres mid-replay
+          # and the next attempt restarts recovery from scratch -- an unrecoverable loop.
+          # Hold liveness off until postgres answers. The budget also covers the
+          # FIRST start's initdb, which on network storage (juicefs, NFS, Ceph)
+          # can exceed 10 minutes: killed mid-initdb, the entrypoint never writes
+          # the network pg_hba.conf entry and every later connection is refused,
+          # a broken volume that only a wipe repairs. So the budget is generous
+          # and configurable (postgres.startupProbe.failureThreshold x 10 s).
+          startupProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - {{ .Values.postgres.username | quote }}
+            periodSeconds: 10
+            failureThreshold: {{ .Values.postgres.startupProbe.failureThreshold | default 180 }}
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - {{ .Values.postgres.username | quote }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            # 1s (the default) is too tight against network-backed storage.
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - {{ .Values.postgres.username | quote }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+      volumes:
+        - name: data
+          {{- if .Values.postgres.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "llm-bench.fullname" . }}-postgres
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "llm-bench.fullname" . }}-postgres
+  labels:
+    {{- include "llm-bench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+      targetPort: postgres
+      protocol: TCP
+      name: postgres
+  selector:
+    {{- include "llm-bench.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres

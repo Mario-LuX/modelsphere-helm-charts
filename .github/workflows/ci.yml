@@ -49,6 +49,8 @@ jobs:
               bodylog-victorialogs) args="--set bodylog.hostPath=/ci" ;;
               continuation-gateway) args="--set config.continuationModel=ci" ;;
               swiss)            args="--set rbac.namespaces[0]=ci" ;;
+              llm-autotune)     args="--set jwtSecret=ci" ;;
+              llm-bench)        args="--set secrets.secretKey=ci --set secrets.platformSecretKey=ci --set secrets.adminEmail=ci@example.com --set secrets.adminUsername=ci --set secrets.adminPassword=ci --set postgres.password=ci" ;;
               *)                args="" ;;
             esac
             echo "$args" > "$RUNNER_TEMP/values/$c"

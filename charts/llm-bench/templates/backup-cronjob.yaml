@@ -1,0 +1,106 @@
+{{- if .Values.backup.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "llm-bench.fullname" . }}-backups
+  labels:
+    {{- include "llm-bench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+  # Backups MUST survive helm uninstall — they're the last-resort recovery
+  # path if the postgres PVC is accidentally deleted.
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.backup.persistence.size }}
+  {{- if .Values.backup.persistence.storageClass }}
+  storageClassName: {{ .Values.backup.persistence.storageClass | quote }}
+  {{- end }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "llm-bench.fullname" . }}-postgres-backup
+  labels:
+    {{- include "llm-bench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  # Don't pile up missed runs if the cluster was asleep — just resume.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: {{ .Values.backup.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.backup.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            {{- include "llm-bench.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: backup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-backup
+              image: "{{ .Values.backup.image.registry }}/{{ .Values.backup.image.repository }}:{{ .Values.backup.image.tag }}"
+              imagePullPolicy: {{ .Values.image.backend.pullPolicy }}
+              env:
+                - name: PGHOST
+                  value: {{ include "llm-bench.fullname" . }}-postgres
+                - name: PGPORT
+                  value: "5432"
+                - name: PGUSER
+                  value: {{ .Values.postgres.username | quote }}
+                - name: PGDATABASE
+                  value: {{ .Values.postgres.database | quote }}
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "llm-bench.fullname" . }}
+                      key: POSTGRES_PASSWORD
+                - name: RETENTION_DAYS
+                  value: {{ .Values.backup.retentionDays | quote }}
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  ts=$(date +%Y%m%d-%H%M%S)
+                  out="/backup/llmbench-${ts}.dump"
+                  echo "[backup] starting pg_dump → ${out}"
+                  # --format=custom is compact and lets pg_restore do selective restores.
+                  # --no-owner / --no-acl keep the dump portable across roles.
+                  pg_dump --format=custom --no-owner --no-acl --file="${out}"
+                  # Sanity check: file exists and is non-empty.
+                  test -s "${out}" || { echo "[backup] dump file empty"; exit 1; }
+                  echo "[backup] wrote $(stat -c %s "${out}") bytes"
+                  echo "[backup] pruning dumps older than ${RETENTION_DAYS} days"
+                  find /backup -maxdepth 1 -name 'llmbench-*.dump' -mtime "+${RETENTION_DAYS}" -print -delete
+                  echo "[backup] remaining dumps:"
+                  ls -lh /backup/ | head -50
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+          volumes:
+            - name: backup
+              persistentVolumeClaim:
+                claimName: {{ include "llm-bench.fullname" . }}-backups
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

@@ -1,0 +1,12 @@
+apiVersion: v2
+name: llm-bench
+description: LLM Benchmark Platform - FastAPI backend, Vue frontend, Dramatiq workers
+
+type: application
+
+version: 0.3.0
+appVersion: "0.3.0"
+home: https://github.com/modelsphere/llm-bench
+sources:
+  - https://github.com/modelsphere/llm-bench
+keywords: [llm, inference, benchmarking, replay, kubernetes]

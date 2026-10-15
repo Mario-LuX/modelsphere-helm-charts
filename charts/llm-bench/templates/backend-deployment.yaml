@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llm-bench.fullname" . }}-backend
+  labels:
+    {{- include "llm-bench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  replicas: {{ .Values.replicaCount.backend }}
+  selector:
+    matchLabels:
+      {{- include "llm-bench.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: backend
+  template:
+    metadata:
+      labels:
+        {{- include "llm-bench.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: backend
+      annotations:
+        # The settings arrive through envFrom: a changed value must restart
+        # the pods that read it, or they keep the old one until something
+        # else restarts them.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      serviceAccountName: {{ include "llm-bench.serviceAccountName" . }}
+      initContainers:
+        - name: wait-for-db
+          image: "{{ .Values.initContainer.image.registry }}/{{ .Values.initContainer.image.repository }}:{{ .Values.initContainer.image.tag }}"
+          imagePullPolicy: {{ .Values.image.backend.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z {{ include "llm-bench.postgresql.fullname" . }} 5432; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready"
+      containers:
+        - name: backend
+          image: {{ include "llm-bench.backendImage" . | quote }}
+          imagePullPolicy: {{ .Values.image.backend.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "llm-bench.fullname" . }}
+            - secretRef:
+                name: {{ include "llm-bench.fullname" . }}
+          {{- with .Values.app.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.datasets.enabled }}
+          volumeMounts:
+            - name: datasets
+              mountPath: {{ .Values.datasets.mountPath }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          # Startup + liveness use /livez (no external deps): they answer "is the
+          # process up", never "is Redis/DB reachable". This stops a transient
+          # Redis/DNS blip from failing liveness and crash-looping the pod on a
+          # flaky-DNS node. Readiness uses /health (DB+Redis) so the pod is just
+          # pulled from the Service while a dep is down, then re-added on recovery.
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: http
+            failureThreshold: 12
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            # Tolerate a few missed checks before declaring the process dead.
+            failureThreshold: 3
+          # The Service keeps sending requests to a terminating pod for a few
+          # seconds; serve them, so a rolling upgrade drops none (AutoTune
+          # polls it through every benchmark).
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "8"]
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources.backend | nindent 12 }}
+      {{- if .Values.datasets.enabled }}
+      volumes:
+        - name: datasets
+          persistentVolumeClaim:
+            claimName: {{ include "llm-bench.fullname" . }}-datasets
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,49 @@
+{{- $fullName := include "llm-autotune.fullname" . -}}
+# On an upgrade, migrate the schema BEFORE any pod is replaced. Run after them
+# (as the migrate Job does), the new API served requests against the old
+# schema until the migration caught up, and answered 500: long enough to end a
+# policy session that was running through the upgrade. The pods still running
+# meanwhile are the old release's, and the migrations only add (a column, a
+# table), so the old code keeps working on the new schema.
+#
+# Not on install: there is no database before the release's objects exist,
+# and the migrate Job creates it. It runs with the settings already in the
+# cluster (the previous release's ConfigMap and Secret), which name the same
+# database.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullName }}-schema
+  labels: {{- include "llm-autotune.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 2
+  # Waits up to 10 minutes for the database, then fails the upgrade rather
+  # than starting new pods against a schema it could not migrate.
+  activeDeadlineSeconds: 1200
+  template:
+    metadata:
+      labels:
+        {{- include "llm-autotune.labels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "llm-autotune.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: schema
+          image: {{ include "llm-autotune.backendImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "app.db.bootstrap", "--schema-only"]
+          {{- include "llm-autotune.env" . | nindent 10 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}

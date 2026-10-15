@@ -1,0 +1,78 @@
+{{- /*
+On an upgrade, migrate before any pod is replaced. After them (as the migrate
+Job runs), the new backend answers from the old schema until the migration
+catches up: 500s to AutoTune's polling and to people's pages. The old pods
+keep running against the new schema meanwhile, so a migration only adds (a
+nullable or defaulted column, a table). Not on install: the database does not
+exist before the release does. The preflight's refusal now fails the upgrade
+before anything changed. Seeding stays in the migrate Job, with the new
+settings.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "llm-bench.fullname" . }}-schema
+  labels:
+    {{- include "llm-bench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  template:
+    metadata:
+      labels:
+        {{- include "llm-bench.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "llm-bench.serviceAccountName" . }}
+      initContainers:
+        - name: wait-for-db
+          image: "{{ .Values.initContainer.image.registry }}/{{ .Values.initContainer.image.repository }}:{{ .Values.initContainer.image.tag }}"
+          imagePullPolicy: {{ .Values.image.backend.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z {{ include "llm-bench.postgresql.fullname" . }} 5432; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready"
+      containers:
+        - name: migrate
+          image: {{ include "llm-bench.backendImage" . | quote }}
+          imagePullPolicy: {{ .Values.image.backend.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          command:
+            - sh
+            - -c
+            - |
+              python preflight_migration.py && alembic upgrade head
+          envFrom:
+            - configMapRef:
+                name: {{ include "llm-bench.fullname" . }}
+            - secretRef:
+                name: {{ include "llm-bench.fullname" . }}
+          {{- with .Values.app.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  backoffLimit: 10

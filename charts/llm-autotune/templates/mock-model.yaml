@@ -1,0 +1,52 @@
+{{- if .Values.mockModel.enabled }}
+{{- $fullName := include "llm-autotune.fullname" . -}}
+# A placeholder weights directory for the mock engine, on every node a run can
+# land on. The platform refuses to start an engine on an empty model directory
+# (that is how a missing model shows up on a real cluster), and the mock loads
+# nothing, so one small file satisfies the check. The long-running container
+# only keeps the DaemonSet alive; running the mock engine image means every
+# node already has it when the first run starts.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ $fullName }}-mock-model
+  labels: {{- include "llm-autotune.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: mock-model
+  template:
+    metadata:
+      labels:
+        {{- include "llm-autotune.stableLabels" . | nindent 8 }}
+        app.kubernetes.io/component: mock-model
+    spec:
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: write
+          image: {{ include "llm-autotune.mockEngineImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["sh", "-c", "echo '{\"model_type\": \"mock\"}' > /model/config.json"]
+          volumeMounts:
+            - name: model
+              mountPath: /model
+      containers:
+        - name: hold
+          image: {{ include "llm-autotune.mockEngineImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              cpu: 1m
+              memory: 8Mi
+            limits:
+              memory: 32Mi
+      volumes:
+        - name: model
+          hostPath:
+            path: {{ .Values.mockModel.path }}
+            type: DirectoryOrCreate
+{{- end }}

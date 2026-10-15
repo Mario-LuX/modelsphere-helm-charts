@@ -1,0 +1,71 @@
+{{- $fullName := include "llm-autotune.fullname" . -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullName }}-frontend
+  labels: {{- include "llm-autotune.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.frontend.service.type | default "ClusterIP" }}
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: frontend
+  ports:
+    - port: 80
+      targetPort: 80
+      {{- if and (eq (.Values.frontend.service.type | default "ClusterIP") "NodePort") .Values.frontend.service.nodePort }}
+      nodePort: {{ .Values.frontend.service.nodePort }}
+      {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullName }}-frontend
+  labels: {{- include "llm-autotune.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.frontend.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: frontend
+  template:
+    metadata:
+      labels:
+        {{- include "llm-autotune.labels" . | nindent 8 }}
+        app.kubernetes.io/component: frontend
+    spec:
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: frontend
+          image: {{ include "llm-autotune.frontendImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 80
+          env:
+            # nginx proxies /api to this, so the SPA and the API are one origin
+            # and the browser needs no CORS at all. Fully qualified: nginx
+            # resolves it itself, without resolv.conf's search domains, so the
+            # short service name never resolves.
+            - name: API_UPSTREAM
+              value: {{ $fullName }}-api.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain | default "cluster.local" }}:8000
+          # It also proxies the API, which is the address policy containers
+          # call: same grace as the API's pods during a rolling upgrade.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "8"]
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            periodSeconds: 10
+          {{- with .Values.frontend.resources }}
+          resources: {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}

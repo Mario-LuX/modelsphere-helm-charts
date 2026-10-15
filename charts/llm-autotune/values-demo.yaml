@@ -1,0 +1,29 @@
+# A cluster with no GPUs: kind, a laptop, a CPU-only test cluster. Runs launch
+# the mock engine — an image that answers the same endpoints sglang does and
+# needs no weights and no cards — so the whole loop runs for real: scheduling,
+# launch, health checks, benchmarking and ranking. deploy/demo.sh installs
+# with this file, next to a real LLMBench.
+#
+# It proves the platform, not a model: nothing measured this way means
+# anything about performance. For GPUs, install without this file.
+gpuCluster:
+  inCluster: true
+  workloadKind: deployment
+  # No device plugin and no GPU nodes, so ask for neither.
+  gpuResource: ""
+  runtimeClass: ""
+  tolerateGpuTaint: false
+  autoRegister: true
+
+# Where the mock engine finds its (placeholder) weights on every node.
+mockModel:
+  enabled: true
+
+# Such a cluster rarely has ReadWriteMany storage; engine logs are the only
+# thing lost.
+runLogs:
+  enabled: false
+
+postgresql:
+  storage:
+    size: 1Gi

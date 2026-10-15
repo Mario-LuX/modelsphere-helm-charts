@@ -1,0 +1,74 @@
+{{- $fullName := include "llm-autotune.fullname" . -}}
+# One worker, ever. It holds a Postgres advisory lock, so a second replica
+# would sit idle rather than corrupt anything — but Recreate makes the handover
+# explicit instead of leaving two pods racing for the lock during a rollout.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullName }}-worker
+  labels: {{- include "llm-autotune.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "llm-autotune.labels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        # The secret is read through envFrom too: a new API key or password
+        # must restart the pods that read it, as a new setting does.
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "llm-autotune.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker
+          image: {{ include "llm-autotune.backendImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "app.worker"]
+          {{- include "llm-autotune.env" . | nindent 10 }}
+          volumeMounts:
+            {{- if .Values.runLogs.enabled }}
+            - name: runlogs
+              mountPath: /app/runs
+            {{- end }}
+            {{- if .Values.worker.ssh.enabled }}
+            # Mounted read-only with a restrictive defaultMode: ssh refuses a
+            # key file anyone else can read.
+            - name: ssh
+              mountPath: /root/.ssh
+              readOnly: true
+            {{- end }}
+          {{- with .Values.worker.resources }}
+          resources: {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        {{- if .Values.runLogs.enabled }}
+        - name: runlogs
+          persistentVolumeClaim:
+            claimName: {{ $fullName }}-runlogs
+        {{- end }}
+        {{- if .Values.worker.ssh.enabled }}
+        - name: ssh
+          secret:
+            secretName: {{ required "worker.ssh.existingSecret is required when worker.ssh.enabled=true" .Values.worker.ssh.existingSecret }}
+            defaultMode: 0400
+        {{- end }}
+      {{- with (.Values.worker.nodeSelector | default .Values.nodeSelector) }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (.Values.worker.tolerations | default .Values.tolerations) }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}

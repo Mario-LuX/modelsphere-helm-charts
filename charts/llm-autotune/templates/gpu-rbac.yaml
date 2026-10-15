@@ -1,0 +1,96 @@
+{{- if and .Values.gpuCluster.inCluster .Values.serviceAccount.create }}
+{{- $fullName := include "llm-autotune.fullname" . -}}
+{{- $ns := .Values.gpuCluster.namespace | default .Release.Namespace -}}
+# What the launch driver needs in the namespace runs land in, and nothing more.
+# This is NOT the operator's RBAC (that ships with the operator and is much
+# broader): in "custom" mode the platform only creates and reads TuningRuns and
+# the operator does the rest; in "deployment" mode it manages the engine's
+# Deployment and Service itself.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullName }}-launch
+  namespace: {{ $ns }}
+  labels: {{- include "llm-autotune.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["tuning.modelsphere.dev"]
+    resources: ["tuningruns"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  # Read the pods a run produced: where it landed, why it will not start.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  # Logs, for classifying a failure by what the engine actually said.
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # Warning events (FailedMount and friends), so a run that never started
+  # carries its real reason instead of a generic timeout.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
+  # A policy is a CONTROLLER, not a service: it dials the platform API and asks
+  # for launches. So it runs as a Job — narrower than a Deployment grant on
+  # purpose, because a Job cannot become a long-lived service.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "delete"]
+  # The operator-free workload mode: the driver manages the engine's own
+  # Deployment and its NodePort Service.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullName }}-launch
+  namespace: {{ $ns }}
+  labels: {{- include "llm-autotune.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullName }}-launch
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "llm-autotune.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# Nodes are cluster-scoped, so reading them needs a ClusterRole. READ-ONLY: the
+# platform reads allocatable GPUs and the GPU product label to fill in a
+# machine's card count and type instead of asking you to type them, and reads
+# InternalIP to resolve a NodePort endpoint. It never writes a node — no
+# cordon, no label, no taint. With gpuCluster.countFreeCards it also lists pods
+# in every namespace, to count the cards other workloads hold on each node.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullName }}-nodes-read
+  labels: {{- include "llm-autotune.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  {{- if .Values.gpuCluster.countFreeCards }}
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fullName }}-nodes-read
+  labels: {{- include "llm-autotune.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fullName }}-nodes-read
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "llm-autotune.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

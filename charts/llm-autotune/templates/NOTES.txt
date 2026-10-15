@@ -1,0 +1,65 @@
+{{- $runLogs := include "llm-autotune.runLogsProblem" . -}}
+{{- if $runLogs }}
+{{- $why := splitList " " $runLogs }}
+WARNING: the API and worker will stay Pending.
+
+runLogs keeps complete engine logs as files on a volume the worker and the API
+share, so its claim, {{ include "llm-autotune.fullname" . }}-runlogs, needs ReadWriteMany storage.
+{{- if eq (index $why 0) "no-default" }}
+This cluster has no default storage class.
+{{- else if eq (index $why 0) "missing" }}
+There is no storage class named {{ index $why 1 }}.
+{{- else }}
+The class it gets, {{ index $why 1 }} ({{ index $why 2 }}), only makes single-node volumes.
+{{- end }}
+Either:
+
+  - name a shared-filesystem class (NFS, CephFS, EFS, Filestore, Azure Files):
+      helm upgrade {{ .Release.Name }} <chart> --reuse-values --set runLogs.storageClass=<class>
+  - or keep logs in the database only:
+      helm upgrade {{ .Release.Name }} <chart> --reuse-values --set runLogs.enabled=false
+    The UI still shows the end of every log, and a running container's log.
+
+{{ end -}}
+{{ include "llm-autotune.fullname" . }} is installed.
+
+{{ if .Values.ingress.enabled -}}
+The UI is at http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.host }}
+{{- else if eq (.Values.frontend.service.type | default "ClusterIP") "NodePort" -}}
+The UI is on a NodePort of every node:
+
+  kubectl -n {{ .Release.Namespace }} get svc {{ include "llm-autotune.fullname" . }}-frontend -o jsonpath='{.spec.ports[0].nodePort}'
+
+then open http://<node address>:<that port>
+{{- else -}}
+No ingress. To reach the UI:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "llm-autotune.fullname" . }}-frontend 8080:80
+
+then open http://localhost:8080
+{{- end }}
+
+{{ if .Values.adminPassword -}}
+Sign in as {{ .Values.adminUsername }} with the password you set.
+{{- else -}}
+No admin account was created: set adminPassword and upgrade, or create the
+first user yourself. Nothing can be done in the UI until one exists.
+{{- end }}
+
+{{ if .Values.mockModel.enabled -}}
+No GPUs: campaigns run the mock engine. Use image
+  {{ include "llm-autotune.mockEngineImage" . }}
+and model path {{ .Values.mockModel.path }} (a placeholder on every node).
+{{- end }}
+
+{{ if and (not .Values.publicApiUrl) (not .Values.gpuCluster.inCluster) -}}
+NOTE: publicApiUrl is empty. Policy campaigns need it — it is how a policy
+container on a GPU machine calls the platform back. Set it to an address that
+machine can reach and upgrade.
+{{- end }}
+
+{{ if and (not .Values.llmbench.url) (not .Values.mock.enabled) -}}
+NOTE: no benchmark platform configured (llmbench.url). Runs will launch and
+then have nothing to measure them. Point it at your LLMBench (deploy/quickstart.sh
+installs one and wires the two together).
+{{- end }}

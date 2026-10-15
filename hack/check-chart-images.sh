@@ -41,6 +41,8 @@ extra_values() {
     bodylog-victorialogs) echo "--set bodylog.hostPath=/ci" ;;
     continuation-gateway) echo "--set config.continuationModel=ci" ;;
     swiss)                echo "--set rbac.namespaces[0]=ci" ;;
+    llm-autotune)         echo "--set jwtSecret=ci" ;;
+    llm-bench)            echo "--set secrets.secretKey=ci --set secrets.platformSecretKey=ci --set secrets.adminEmail=ci@example.com --set secrets.adminUsername=ci --set secrets.adminPassword=ci --set postgres.password=ci" ;;
     *)                echo "" ;;
   esac
 }

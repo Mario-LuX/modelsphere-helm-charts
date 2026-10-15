@@ -1,0 +1,21 @@
+{{- if .Values.runLogs.enabled }}
+# Engine-log captures: the worker writes, the API serves (GET /runs/{id}/log).
+# Two pods, one volume, so it needs ReadWriteMany. Logs are small, so any
+# shared filesystem class does — this is NOT where model weights live. On a
+# cluster with no RWX class at all, set runLogs.enabled=false: the UI still
+# shows the end of every log (kept in the database) and a running container's
+# log. The install notes warn when the class the claim would get cannot bind it.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "llm-autotune.fullname" . }}-runlogs
+  labels: {{- include "llm-autotune.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteMany"]
+  {{- with .Values.runLogs.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.runLogs.size }}
+{{- end }}

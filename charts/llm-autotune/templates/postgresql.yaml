@@ -1,0 +1,89 @@
+{{- if .Values.postgresql.enabled }}
+{{- $fullName := include "llm-autotune.fullname" . -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullName }}-postgresql
+  labels: {{- include "llm-autotune.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: postgresql
+  ports:
+    - port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullName }}-postgresql
+  labels: {{- include "llm-autotune.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $fullName }}-postgresql
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: postgresql
+  template:
+    metadata:
+      labels:
+        {{- include "llm-autotune.stableLabels" . | nindent 8 }}
+        app.kubernetes.io/component: postgresql
+    spec:
+      containers:
+        - name: postgresql
+          image: {{ .Values.postgresql.image | quote }}
+          env:
+            - name: POSTGRES_USER
+              value: {{ .Values.postgresql.user | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.postgresql.database | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgresql.existingSecret | default (printf "%s-secrets" $fullName) }}
+                  key: POSTGRES_PASSWORD
+            # The image refuses to initialise into a non-empty directory, and
+            # a mounted volume has lost+found in it — so keep the data one
+            # level down rather than at the mount point.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.postgresql.user | quote }}]
+            periodSeconds: 5
+          {{- with .Values.postgresql.resources }}
+          resources: {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if not .Values.postgresql.storage.enabled }}
+      # No claim: the data lives and dies with the pod. For trials and test
+      # installs, and for clusters whose storage class is too slow for an initdb.
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- if .Values.postgresql.storage.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.postgresql.storage.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgresql.storage.size }}
+  {{- end }}
+{{- end }}

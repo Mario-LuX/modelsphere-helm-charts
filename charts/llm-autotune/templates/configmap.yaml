@@ -1,0 +1,51 @@
+{{- $fullName := include "llm-autotune.fullname" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullName }}-config
+  labels: {{- include "llm-autotune.labels" . | nindent 4 }}
+data:
+  {{- if and (not .Values.publicApiUrl) .Values.gpuCluster.inCluster }}
+  # Runs, and so policy containers, land in this cluster: they can reach the
+  # API by its service name.
+  AUTOTUNE_PUBLIC_API_URL: {{ printf "http://%s-api.%s.svc.%s:8000" $fullName .Release.Namespace (.Values.clusterDomain | default "cluster.local") | quote }}
+  {{- else }}
+  AUTOTUNE_PUBLIC_API_URL: {{ .Values.publicApiUrl | quote }}
+  {{- end }}
+  AUTOTUNE_PUBLIC_UI_URL: {{ .Values.publicUiUrl | quote }}
+  AUTOTUNE_CORS_ORIGINS: {{ .Values.corsOrigins | quote }}
+  AUTOTUNE_RUN_LOG_DIR: /app/runs
+  AUTOTUNE_ADMIN_USERNAME: {{ .Values.adminUsername | quote }}
+  AUTOTUNE_ALLOW_SIGNUP: {{ .Values.allowSignup | quote }}
+  {{- if .Values.mock.enabled }}
+  AUTOTUNE_LLMBENCH_BASE_URL: http://{{ $fullName }}-llmbench-mock:8000
+  AUTOTUNE_DOCKER_GPU_MODE: "none"
+  {{- else }}
+  AUTOTUNE_LLMBENCH_BASE_URL: {{ .Values.llmbench.url | quote }}
+  {{- end }}
+  AUTOTUNE_LLMBENCH_BENCHMARK_SLUG: {{ .Values.llmbench.benchmarkSlug | quote }}
+  {{- if .Values.llmbench.webUrl }}
+  AUTOTUNE_LLMBENCH_WEB_URL: {{ .Values.llmbench.webUrl | quote }}
+  {{- end }}
+  {{- if .Values.llmbench.email }}
+  AUTOTUNE_LLMBENCH_EMAIL: {{ .Values.llmbench.email | quote }}
+  {{- end }}
+  {{- if .Values.llmbench.victoriaLogsUrl }}
+  AUTOTUNE_LLMBENCH_VICTORIALOGS_URL: {{ .Values.llmbench.victoriaLogsUrl | quote }}
+  {{- end }}
+  {{- if .Values.gpuCluster.inCluster }}
+  # The launch driver talks to the API server this release runs in, using the
+  # chart's own ServiceAccount — no kubeconfig to mint or paste.
+  AUTOTUNE_K8S_API_MODE: "client"
+  AUTOTUNE_K8S_IN_CLUSTER: "true"
+  AUTOTUNE_K8S_NAMESPACE: {{ .Values.gpuCluster.namespace | default .Release.Namespace | quote }}
+  AUTOTUNE_K8S_WORKLOAD_KIND: {{ if .Values.operator.enabled }}"custom"{{ else }}{{ .Values.gpuCluster.workloadKind | quote }}{{ end }}
+  AUTOTUNE_K8S_GPU_RESOURCE: {{ .Values.gpuCluster.gpuResource | quote }}
+  AUTOTUNE_K8S_RUNTIME_CLASS: {{ .Values.gpuCluster.runtimeClass | quote }}
+  AUTOTUNE_K8S_TOLERATE_GPU_TAINT: {{ .Values.gpuCluster.tolerateGpuTaint | quote }}
+  AUTOTUNE_K8S_NODE_SELECTOR: {{ .Values.gpuCluster.nodeSelector | quote }}
+  AUTOTUNE_K8S_MODEL_PVC: {{ .Values.gpuCluster.modelPvc | quote }}
+  AUTOTUNE_K8S_MODEL_PVC_ROOT: {{ .Values.gpuCluster.modelPvcRoot | quote }}
+  AUTOTUNE_K8S_SHM_SIZE_MB: {{ .Values.gpuCluster.shmSizeMb | quote }}
+  AUTOTUNE_AUTO_REGISTER_CLUSTER: {{ .Values.gpuCluster.autoRegister | quote }}
+  {{- end }}

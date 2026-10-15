@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llm-bench.fullname" . }}-redis
+  labels:
+    {{- include "llm-bench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  replicas: 1
+  # The redis PVC is ReadWriteOnce, so a rolling update that lands the new pod
+  # on a different node deadlocks: the new pod cannot mount the volume while the
+  # old pod on the old node still holds it. Recreate stops the old pod first.
+  # This matters whenever scheduling spans more than one node (see values.yaml
+  # affinity) -- with a single-node pin a RollingUpdate happened to work.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "llm-bench.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: redis
+  template:
+    metadata:
+      labels:
+        {{- include "llm-bench.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: redis
+    spec:
+      containers:
+        - name: redis
+          image: "{{ .Values.redis.image.registry }}/{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
+          imagePullPolicy: {{ .Values.image.backend.pullPolicy }}
+          args:
+            - "--maxmemory"
+            - {{ .Values.redis.maxmemory | quote }}
+            - "--maxmemory-policy"
+            - {{ .Values.redis.maxmemoryPolicy | quote }}
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          livenessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "llm-bench.fullname" . }}-redis
+  labels:
+    {{- include "llm-bench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  type: ClusterIP
+  ports:
+    - port: 6379
+      targetPort: redis
+      protocol: TCP
+      name: redis
+  selector:
+    {{- include "llm-bench.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: redis

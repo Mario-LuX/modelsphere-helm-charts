@@ -1,0 +1,505 @@
+# Paths named in this chart's comments -- docs/*, scripts/* -- are in the
+# llm-bench project repository (`home` in Chart.yaml), which is where the chart
+# is maintained and copied here from. They are not paths in this one.
+#
+# ---------------------------------------------------------------------------
+# Image settings
+# ---------------------------------------------------------------------------
+image:
+  backend:
+    repository: docker.io/4pdosc/llm-bench-backend
+    pullPolicy: IfNotPresent
+    # Empty falls back to the chart's appVersion, so a chart upgrade moves both.
+    tag: ""
+  frontend:
+    repository: docker.io/4pdosc/llm-bench-frontend
+    pullPolicy: IfNotPresent
+    tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# ---------------------------------------------------------------------------
+# Replicas
+# ---------------------------------------------------------------------------
+replicaCount:
+  backend: 1
+  # Concurrent benchmark runs = worker pods x app.worker.processes. Sized for a
+  # first install; a production deployment runs e.g. 4 pods x 8 processes
+  # (32 concurrent runs) with the worker resources below scaled to match.
+  worker: 1
+  frontend: 1
+
+# ---------------------------------------------------------------------------
+# Service account
+# ---------------------------------------------------------------------------
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+  # If create=false, set name to an existing service account that the
+  # cluster admin has already provisioned with the required permissions.
+
+# ---------------------------------------------------------------------------
+# Pod settings
+# ---------------------------------------------------------------------------
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+resources:
+  backend:
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+  worker:
+    # Memory scales with app.worker.processes: each process holds the bench +
+    # sqlalchemy import tree, and one replay keeps its record set resident
+    # (~0.5 GB). Budget ~3 GiB per process at peak — the default below is for
+    # 2 processes; for 8, use requests 8Gi / limits 24Gi. An OOM kill is
+    # survivable (the reaper marks the submission FAILED), just wasteful.
+    #
+    # ephemeral-storage bounds per-submission scratch dirs under /tmp
+    # (~100 MB per ordinary run, ~1.4 GB for a replay with save_responses).
+    # Setting it means an overfull node evicts the run that ballooned, not a
+    # bystander — postgres may share the node.
+    limits:
+      cpu: 4000m
+      memory: 8Gi
+      ephemeral-storage: 10Gi
+    requests:
+      cpu: 500m
+      memory: 2Gi
+      ephemeral-storage: 2Gi
+  frontend:
+    limits:
+      cpu: 500m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+# ---------------------------------------------------------------------------
+# Service exposure
+# ---------------------------------------------------------------------------
+# Frontend only — backend is reached through the frontend nginx (which
+# reverse-proxies /api → backend), so the backend service stays ClusterIP.
+# Set type=NodePort + a nodePort in the kube-apiserver's --service-node-port-range
+# (typically 30000-32767) to expose the UI without an Ingress or port-forward.
+service:
+  frontend:
+    type: ClusterIP
+    port: 80
+    nodePort: ""   # only used when type=NodePort; empty lets k8s pick a free port
+
+# ---------------------------------------------------------------------------
+# Autoscaling
+# ---------------------------------------------------------------------------
+autoscaling:
+  backend:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 80
+  worker:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+  frontend:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 80
+
+# ---------------------------------------------------------------------------
+# Node affinity / tolerations
+# ---------------------------------------------------------------------------
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# ---------------------------------------------------------------------------
+# Ingress
+# ---------------------------------------------------------------------------
+# Off by default: a fresh cluster may have no ingress controller at all, and
+# port-forwarding the frontend service (see NOTES.txt) is enough to log in and
+# submit. Turn it on once you know your controller and hostname.
+ingress:
+  enabled: false
+  # Your controller's IngressClass — "nginx", "haproxy", "traefik", …
+  className: ""
+  annotations: {}
+    # Controller-specific. One worth knowing: the haproxytech controller flips
+    # its ssl-redirect default to true as soon as a host appears under tls:
+    # below, and 302s every HTTP request to https://<host>:8443. If HTTPS is
+    # not actually reachable there, the whole site breaks — so on that
+    # controller set haproxy.org/ssl-redirect explicitly rather than omitting
+    # it, plus haproxy.org/ssl-redirect-port when it is not 443.
+  hosts:
+    - host: llm-bench.example.com    # <-- REPLACE
+      paths:
+        # Single rule: everything goes to the frontend nginx, which already
+        # proxies /api/ -> backend (stripping the prefix) and matches FastAPI's
+        # rootPath=/api. Do NOT add a separate /api -> backend rule here, or the
+        # prefix-strip is bypassed and API/Swagger paths 404.
+        - path: /
+          pathType: Prefix
+          service: frontend
+  # A kubernetes.io/tls secret in this namespace, e.g.
+  #   kubectl create secret tls llm-bench-tls --cert=tls.crt --key=tls.key
+  tls: []
+  #  - secretName: llm-bench-tls
+  #    hosts:
+  #      - llm-bench.example.com     # must match the host above
+
+# ---------------------------------------------------------------------------
+# Application secrets  (REQUIRED — must be overridden at install time)
+# ---------------------------------------------------------------------------
+secrets:
+  secretKey: ""
+  platformSecretKey: ""
+  adminEmail: ""
+  adminUsername: ""
+  adminPassword: ""
+  # Optional: a `service` account for another platform — LLM AutoTune — and the
+  # API key it authenticates with. Give the SAME value to the other platform
+  # (llm-autotune: llmbench.apiKey). Must start with `llmb_`; generate with
+  #   echo "llmb_$(openssl rand -base64 32 | tr -d '=+/' | head -c 43)"
+  # A service account manages only the benchmarks it creates, reads and
+  # triggers rolling-dataset builds, and can preflight endpoints. It is not an
+  # admin: no users, no card types, no collection profiles.
+  serviceUsername: "autotune"
+  serviceApiKey: ""
+
+# ---------------------------------------------------------------------------
+# Application config
+# ---------------------------------------------------------------------------
+app:
+  allowedOrigins: "*"
+  # Extra environment for the backend, worker, migrate job and collector, as
+  # plain k8s env entries. For example, a tokenizer other than the one in the
+  # image (Qwen3-0.6B's) for the throughput modules to size prompts with, from
+  # a directory on the datasets volume (docs/deploying.md#install):
+  #   extraEnv:
+  #     - name: PROCESSOR_PATH
+  #       value: /app/dataset/tokenizers/my-model
+  extraEnv: []
+  benchModulesPath: "/app/bench"
+  debug: false
+  # Per-user cap on ACTIVE (queued + running) submissions — fairness guard so
+  # one user can't monopolize the worker pool. Admins are exempt; 0 disables.
+  maxActiveSubmissionsPerUser: 8
+  # The frontend nginx proxies /api/ -> backend and strips the prefix, so tell
+  # FastAPI it lives under /api (makes Swagger UI at /api/docs load the spec).
+  rootPath: "/api"
+  # -------------------------------------------------------------------------
+  # Worker concurrency model
+  # -------------------------------------------------------------------------
+  # Dramatiq runs as `--processes P --threads T`. Tasks are distributed across
+  # P×T slots, but **isolation is at the process level**: a segfault, OOM-kill,
+  # or unhandled fatal signal in any one task only kills its own process (the
+  # dramatiq master respawns it within seconds). Threads inside a process share
+  # fate — one bad task can take down all T threads.
+  #
+  # Default: 4 processes × 1 thread = max isolation (1 task per process).
+  # Increase processes (and memory limit) for more parallelism per pod;
+  # increase threads only if you trust all modules to be crash-safe.
+  worker:
+    # Concurrent runs per worker pod. Tasks are I/O-bound (they wait on the
+    # endpoint under test), so this is memory-bound, not CPU-bound; keep the
+    # memory limit sized to processes x per-task peak (see resources.worker).
+    processes: 2
+    threads: 1
+
+    # --- Live-hang diagnosability -------------------------------------------
+    # Grants the worker container CAP_SYS_PTRACE so `py-spy dump --pid N` (shipped
+    # in the image) can read a Python stack out of a wedged process. Without it
+    # py-spy is inert: the chart drops ALL capabilities, and attaching to a
+    # SIBLING process needs SYS_PTRACE.
+    #
+    # This has to be on BEFORE a hang, not added in response to one — granting it
+    # later means restarting the pod, which destroys the very state you wanted to
+    # inspect. A guidellm teardown deadlock once cost hours of /proc archaeology
+    # that a stack dump would have answered in seconds.
+    #
+    # Cost: a process in this container can ptrace its siblings — same container,
+    # same uid, first-party code only (modules never execute user-supplied code;
+    # user input is an endpoint URL and an API key). Set false to restore the
+    # drop-ALL baseline, accepting that the next hang is again undiagnosable.
+    enablePtrace: true
+
+    # --- Graceful drain on rollout (uninterrupted code updates) --------------
+    # On a code deploy, k8s SIGTERMs each worker pod. Dramatiq then lets
+    # in-flight submissions finish while new jobs go to the new-code pods —
+    # there is no mid-submission resume, so the only way to not lose work
+    # is to let the old pod finish it. ("Stops pulling new jobs" is only true
+    # because queuePrefetch below is 1 — see that knob.) Two timeouts gate how
+    # long an in-flight job
+    # may keep running on a draining pod, and BOTH derive from drainBudgetSeconds:
+    #   * dramatiq --worker-shutdown-timeout (= drainBudgetSeconds * 1000): past
+    #     this, dramatiq abandons the still-running task (its built-in default is
+    #     only 10 min, which would cut long runs short — so we set it explicitly).
+    #   * pod terminationGracePeriodSeconds (= drainBudgetSeconds + graceBuffer):
+    #     past this, k8s SIGKILLs the whole pod, so it must exceed the dramatiq
+    #     timeout plus a small cleanup margin.
+    # A submission still running past the budget is SIGKILLed -> reaped -> retried
+    # from scratch. 12h covers the common "couple hours" runs and most long ones;
+    # for the longest (12-20h) jobs, cordon first (docs/deploying.md) rather
+    # than holding the rollout.
+    # CAUTION: while a long job drains, its old worker pod lingers Terminating for
+    # up to this budget, so a deploy mid-12h-job keeps TWO worker generations
+    # co-resident for that whole window. Size the cluster for that, or cordon.
+    drainBudgetSeconds: 43200
+    # Extra k8s grace beyond the dramatiq shutdown timeout, for broker close +
+    # final log flush. Keep small; it just delays SIGKILL past a clean drain.
+    terminationGraceBufferSeconds: 120
+    # Rollout surge: extra new-code worker pods spun up to absorb new jobs while
+    # old pods drain. maxUnavailable is pinned to 0 (never drop below desired
+    # ready count). Keep surge small — old drainers linger (Terminating, no longer pulling jobs) for up to
+    # drainBudgetSeconds, so >1 generation is co-resident during a rollout.
+    maxSurge: 1
+    # Max unacked messages a worker process may own (env dramatiq_queue_prefetch;
+    # lowercase, read at import — dramatiq has no CLI flag for it). Dramatiq
+    # claims a message at FETCH time, and its default is threads*2 = 2, so a
+    # process hours into a run also "owns" one unstarted submission — buffered
+    # in process memory where its only worker thread can't reach it, and
+    # unstealable while the consumer heartbeats (the same mechanism that keeps
+    # a draining pod's in-flight job safe). Seen in production: a buffered
+    # message rode out a drain while four new-code workers sat idle; and because consumers keep fetching DURING a drain, a busy
+    # draining pod also holds an open capture slot for jobs enqueued hours
+    # after its SIGTERM. Pinned to 1, "claimed" == "running": busy processes
+    # fetch nothing, idle processes start what they fetch immediately. With
+    # threads=1 the extra prefetch bought no throughput, only that hostage
+    # window.
+    queuePrefetch: 1
+
+# ---------------------------------------------------------------------------
+# Rolling replay-dataset collector
+# ---------------------------------------------------------------------------
+# An always-on pod (backend image, own resource limits) that samples gateway
+# traffic — from the bodylog listener's files, or a VictoriaLogs store — and
+# publishes replay datasets onto the datasets volume.
+# Requires datasets.enabled — it writes where the workers read.
+#
+# Collection POLICY (which traffic, how much, how often) lives in the database
+# and is edited on the admin "Replay Datasets" page, not here. Only wiring and
+# credentials live in the chart.
+#
+# Disabled by default: a deploy that does not opt in is completely unaffected,
+# and every replay benchmark keeps replaying its fixed dataset file.
+# ---------------------------------------------------------------------------
+datasetBuilder:
+  enabled: false
+  port: 8080
+  # Where the collector reads traffic from, for profiles whose source is
+  # `bodylog_files` (the default): the directory the gateway's bodylog listener
+  # writes (github.com/modelsphere/helm-charts, chart `bodylog`). A profile's
+  # source_url is then file://<mountPath>. Mounted read-only.
+  #
+  # The listener's volume is ReadWriteOnce, so the collector must run on the
+  # listener's node: set nodeSelector to that node, and either reuse its claim
+  # or — how the listener is commonly deployed — its hostPath. Profiles using
+  # `victorialogs` need none of this.
+  bodylog:
+    existingClaim: ""
+    hostPath: ""
+    mountPath: /data/bodylog
+    # The zone the listener names its files in: its chart's `timezone` value.
+    fileTimezone: "UTC"
+    nodeSelector: {}
+  # Published datasets go under this path. Defaults to <datasets.mountPath>/replay/auto.
+  feedRoot: ""
+  # Frozen (permanent) datasets go under this path — a build promoted out of the
+  # rolling feed so retention never prunes it. Defaults to
+  # <datasets.mountPath>/replay/frozen (a sibling of feedRoot). Both the backend
+  # and the collector read this from the shared configmap, so they always agree.
+  frozenRoot: ""
+  logLevel: INFO
+  # A build streams from the log store for minutes; SIGTERM abandons it (the
+  # staged file is discarded, the previous build keeps serving), so this only
+  # needs to cover an orderly stop.
+  terminationGracePeriodSeconds: 60
+  resources:
+    limits:
+      cpu: 2000m
+      # Bounded by ONE sub-window's reservoir (sample_size / slices records),
+      # not by the window: a day of traffic is many GB and is never resident.
+      memory: 4Gi
+    requests:
+      cpu: 200m
+      memory: 512Mi
+  # VictoriaLogs credentials, for profiles whose source is `victorialogs`. Set
+  # these in secrets.yaml (gitignored), never here.
+  # A blank username AND token means "no auth".
+  auth:
+    username: ""
+    password: ""
+    token: ""
+  # Shared secret the backend presents when proxying an admin "rebuild now".
+  # The collector is a ClusterIP service, so this just stops any other pod in
+  # the namespace from queueing builds; it is not the user auth boundary.
+  builderToken: ""
+
+# ---------------------------------------------------------------------------
+# Datasets PVC
+# ---------------------------------------------------------------------------
+# ReadOnlyMany lets multiple workers on different nodes share the same
+# datasets.  Your cluster storage class must support ROM (e.g. NFS,
+# EFS, Azure Files, or any RWX-capable provisioner).  If yours does
+# not, override to ReadWriteOnce and pin workers to a single node
+# with nodeSelector / affinity.
+# ---------------------------------------------------------------------------
+datasets:
+  enabled: false
+  storageClass: ""
+  accessMode: ReadOnlyMany
+  size: 50Gi
+  mountPath: /app/dataset
+
+# ---------------------------------------------------------------------------
+# PodDisruptionBudget (requires policy permission — ask cluster admin)
+# ---------------------------------------------------------------------------
+pdb:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# Prometheus ServiceMonitor (requires prometheus-operator in cluster)
+# ---------------------------------------------------------------------------
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  path: /metrics
+  labels: {}
+
+# ---------------------------------------------------------------------------
+# PostgreSQL
+# ---------------------------------------------------------------------------
+# A single postgres:16-alpine instance with its own volume, the same as the
+# docker-compose setup.
+# ---------------------------------------------------------------------------
+postgres:
+  image:
+    registry: docker.io
+    repository: library/postgres
+    tag: "16-alpine"
+  database: llmbench
+  username: "postgres"
+  password: ""
+  # How long the first start may take before the kubelet restarts postgres:
+  # failureThreshold x 10 s. The default (30 min) covers an initdb on slow
+  # network storage; a restart during initdb leaves a volume no client can
+  # connect to (missing pg_hba.conf entry) that only a wipe repairs.
+  startupProbe:
+    failureThreshold: 180
+  # Headroom for more worker processes/backends. Budget: N_worker_procs x
+  # worker pool_size (2) + backend replicas x 15 + slack, kept under this. The
+  # default postgres image caps at 100; 150 covers ~32 worker processes safely.
+  maxConnections: 150
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+  resources:
+    # Postgres is the shared bottleneck for all DB work; give it headroom for
+    # more concurrent connections + page cache as user count grows. Limits raised
+    # for burst; requests kept modest so the pod still schedules on a constrained
+    # (currently single) node.
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# Backups (in-cluster pg_dump CronJob → dedicated PVC)
+# ---------------------------------------------------------------------------
+# Daily pg_dump from the live postgres into a separate PVC. The backup PVC
+# also gets helm.sh/resource-policy: keep so backups survive uninstall and
+# can be used to recover even from an accidental data-PVC delete.
+#
+# Restore is manual: kubectl cp the .dump out of the backup PVC, then
+# pg_restore into a fresh postgres pod. There's no auto-restore — too easy
+# to clobber good data with the wrong backup.
+backup:
+  # Daily pg_dump into its own PVC. Off by default because it provisions a
+  # second volume; turn it on for anything you would mind losing.
+  enabled: false
+  # Cron schedule for the dump. Default: 03:00 daily.
+  schedule: "0 3 * * *"
+  # How many days of dumps to keep. The CronJob's container prunes anything
+  # older than this on each run.
+  retentionDays: 7
+  persistence:
+    size: 20Gi          # plenty of headroom — dumps are typically tens of MB
+    storageClass: ""    # blank = default provisioner (same as postgres PVC)
+  # Reuse the postgres image — gives us pg_dump for free, with no extra image
+  # to maintain or mirror.
+  image:
+    registry: docker.io
+    repository: library/postgres
+    tag: "16-alpine"
+  resources:
+    limits:
+      cpu: 500m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+  # Job history caps — keep recent runs visible via kubectl, but don't pile up.
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+
+# ---------------------------------------------------------------------------
+# Redis
+# ---------------------------------------------------------------------------
+# A single redis:7-alpine instance, the same as the docker-compose setup.
+# ---------------------------------------------------------------------------
+redis:
+  image:
+    registry: docker.io
+    repository: library/redis
+    tag: "7-alpine"
+  # Cap memory below the container limit so Redis refuses new writes (loud
+  # backpressure) instead of being OOM-killed (which drops ALL broker state).
+  # noeviction is mandatory: Redis is the Dramatiq broker + queue markers, so
+  # an eviction policy would silently delete queued jobs.
+  maxmemory: "400mb"
+  maxmemoryPolicy: "noeviction"
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+# ---------------------------------------------------------------------------
+# Init container image (wait-for-db)
+# ---------------------------------------------------------------------------
+initContainer:
+  image:
+    registry: docker.io
+    repository: library/busybox
+    tag: "1.36"

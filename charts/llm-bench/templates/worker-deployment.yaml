@@ -1,0 +1,121 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llm-bench.fullname" . }}-worker
+  labels:
+    {{- include "llm-bench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.replicaCount.worker }}
+  # Graceful-drain rollout: never drop below desired ready capacity, and bring
+  # up new-code pods (maxSurge) to absorb new jobs while old pods drain in-flight
+  # submissions to completion. See app.worker.drainBudgetSeconds in values.yaml.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: {{ .Values.app.worker.maxSurge }}
+  selector:
+    matchLabels:
+      {{- include "llm-bench.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "llm-bench.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+      annotations:
+        # The settings arrive through envFrom: a changed value must restart
+        # the pods that read it, or they keep the old one until something
+        # else restarts them.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      # Hold the pod past SIGTERM long enough for dramatiq to drain an in-flight
+      # submission (= drain budget + cleanup buffer). Must exceed
+      # --worker-shutdown-timeout (drainBudgetSeconds * 1000 ms) or k8s SIGKILLs
+      # the pod mid-drain. See app.worker in values.yaml.
+      terminationGracePeriodSeconds: {{ add .Values.app.worker.drainBudgetSeconds .Values.app.worker.terminationGraceBufferSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      serviceAccountName: {{ include "llm-bench.serviceAccountName" . }}
+      containers:
+        - name: worker
+          image: {{ include "llm-bench.backendImage" . | quote }}
+          imagePullPolicy: {{ .Values.image.backend.pullPolicy }}
+          securityContext:
+            {{- $sc := deepCopy .Values.securityContext }}
+            {{- if .Values.app.worker.enablePtrace }}
+            {{- /* drop-ALL + add SYS_PTRACE: the container keeps only this one.
+                   Lets py-spy read a stack out of a wedged sibling process --
+                   see app.worker.enablePtrace in values.yaml for the tradeoff. */}}
+            {{- $caps := deepCopy (default (dict) $sc.capabilities) }}
+            {{- $_ := set $caps "add" (append (default (list) $caps.add) "SYS_PTRACE" | uniq) }}
+            {{- $_ := set $sc "capabilities" $caps }}
+            {{- end }}
+            {{- toYaml $sc | nindent 12 }}
+          command: ["dramatiq"]
+          # Process-per-task isolation: see values.yaml `app.worker` comment.
+          args:
+            - "app.queue.broker"
+            - "app.queue.jobs"
+            - "--processes"
+            - "{{ .Values.app.worker.processes }}"
+            - "--threads"
+            - "{{ .Values.app.worker.threads }}"
+            # Graceful drain: wait this long (ms) for an in-flight submission to
+            # finish before abandoning it on SIGTERM. Dramatiq's built-in default
+            # is only 10 min; we lift it to the full drain budget so long runs
+            # complete. Must stay <= terminationGracePeriodSeconds below.
+            - "--worker-shutdown-timeout"
+            - "{{ mul .Values.app.worker.drainBudgetSeconds 1000 }}"
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "kill -0 1"
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          envFrom:
+            - configMapRef:
+                name: {{ include "llm-bench.fullname" . }}
+            - secretRef:
+                name: {{ include "llm-bench.fullname" . }}
+          env:
+            # Dramatiq claims messages at fetch time; prefetch > 1 lets a busy
+            # (or draining) process hoard an unstarted submission for up to the
+            # drain budget. See app.worker.queuePrefetch in values.yaml.
+            - name: dramatiq_queue_prefetch
+              value: {{ .Values.app.worker.queuePrefetch | quote }}
+            {{- with .Values.app.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if .Values.datasets.enabled }}
+          volumeMounts:
+            - name: datasets
+              mountPath: {{ .Values.datasets.mountPath }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources.worker | nindent 12 }}
+      {{- if .Values.datasets.enabled }}
+      volumes:
+        - name: datasets
+          persistentVolumeClaim:
+            claimName: {{ include "llm-bench.fullname" . }}-datasets
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

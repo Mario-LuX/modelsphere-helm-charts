@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "llm-bench.fullname" . }}
+  labels:
+    {{- include "llm-bench.labels" . | nindent 4 }}
+data:
+  DATABASE_URL: "postgresql+asyncpg://{{ .Values.postgres.username }}:{{ .Values.postgres.password }}@{{ include "llm-bench.postgresql.fullname" . }}:5432/{{ .Values.postgres.database }}"
+  DATABASE_URL_SYNC: "postgresql://{{ .Values.postgres.username }}:{{ .Values.postgres.password }}@{{ include "llm-bench.postgresql.fullname" . }}:5432/{{ .Values.postgres.database }}"
+  ALLOWED_ORIGINS: {{ .Values.app.allowedOrigins | quote }}
+  BENCH_MODULES_PATH: {{ .Values.app.benchModulesPath | quote }}
+  # Writable cache dirs. The pod runs as non-root UID 1000 (see podSecurityContext)
+  # with no home, so the default ~/.cache resolves to /.cache (unwritable) and
+  # crashes guidellm's synthetic-data tokenizer load. /tmp is world-writable (1777).
+  HOME: "/tmp"
+  HF_HOME: "/tmp/.cache/huggingface"
+  XDG_CACHE_HOME: "/tmp/.cache"
+  DEBUG: {{ .Values.app.debug | quote }}
+  # Per-user cap on active (queued+running) submissions; admins exempt.
+  MAX_ACTIVE_SUBMISSIONS_PER_USER: {{ .Values.app.maxActiveSubmissionsPerUser | default 8 | quote }}
+  ROOT_PATH: {{ .Values.app.rootPath | default "/api" | quote }}
+  WORKER_PROCESSES: {{ .Values.app.worker.processes | quote }}
+  WORKER_THREADS: {{ .Values.app.worker.threads | quote }}
+  {{- if .Values.datasetBuilder.enabled }}
+  # Where the backend proxies admin "rebuild now" requests. Unset means the
+  # admin page still works read-only but cannot start a build.
+  DATASET_BUILDER_URL: "http://{{ include "llm-bench.fullname" . }}-dataset-builder:{{ .Values.datasetBuilder.port }}"
+  # Backend and worker resolve rolling profiles by reading the pointer file
+  # directly off the datasets volume, so they need the same root as the collector.
+  REPLAY_FEED_ROOT: {{ .Values.datasetBuilder.feedRoot | default (printf "%s/replay/auto" .Values.datasets.mountPath) | quote }}
+  {{- end }}
+  {{- if or .Values.datasetBuilder.enabled .Values.datasets.enabled }}
+  # Where frozen (permanent) datasets live. The collector (or, for an import,
+  # the backend) writes them here, the backend lists them from here, and
+  # workers replay them by path — all from one env so nobody disagrees about
+  # the location. A sibling of the rolling feed.
+  REPLAY_FROZEN_ROOT: {{ .Values.datasetBuilder.frozenRoot | default (printf "%s/replay/frozen" .Values.datasets.mountPath) | quote }}
+  {{- end }}

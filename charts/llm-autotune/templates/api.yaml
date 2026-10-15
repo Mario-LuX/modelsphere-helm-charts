@@ -1,0 +1,88 @@
+{{- $fullName := include "llm-autotune.fullname" . -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullName }}-api
+  labels: {{- include "llm-autotune.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: api
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullName }}-api
+  labels: {{- include "llm-autotune.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        {{- include "llm-autotune.labels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        # The secret is read through envFrom too: a new API key or password
+        # must restart the pods that read it, as a new setting does.
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "llm-autotune.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: api
+          image: {{ include "llm-autotune.backendImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 8000
+          {{- include "llm-autotune.env" . | nindent 10 }}
+          {{- if .Values.runLogs.enabled }}
+          volumeMounts:
+            - name: runlogs
+              mountPath: /app/runs
+          {{- end }}
+          # The Service keeps sending requests to a terminating pod for a few
+          # seconds; serve them instead of refusing them, so a rolling upgrade
+          # drops no request (a policy mid-session sees none).
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "8"]
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          {{- with .Values.api.resources }}
+          resources: {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- if .Values.runLogs.enabled }}
+      volumes:
+        - name: runlogs
+          persistentVolumeClaim:
+            claimName: {{ $fullName }}-runlogs
+      {{- end }}
+      {{- with (.Values.api.nodeSelector | default .Values.nodeSelector) }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (.Values.api.tolerations | default .Values.tolerations) }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}

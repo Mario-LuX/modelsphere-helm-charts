@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "llm-bench.fullname" . }}-frontend
+  labels:
+    {{- include "llm-bench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  type: {{ .Values.service.frontend.type }}
+  ports:
+    - port: {{ .Values.service.frontend.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+      {{- if and (eq .Values.service.frontend.type "NodePort") .Values.service.frontend.nodePort }}
+      nodePort: {{ .Values.service.frontend.nodePort }}
+      {{- end }}
+  selector:
+    {{- include "llm-bench.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
