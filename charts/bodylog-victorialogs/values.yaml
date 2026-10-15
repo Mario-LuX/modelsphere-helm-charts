@@ -15,6 +15,20 @@ bodylog:
 victorialogs:
   enabled: true
   server:
+    # A fixed Service name, so the address is one another workload can be
+    # configured with: http://victorialogs.<namespace>.svc:9428.
+    #
+    # Without it the subchart derives the name from the release name --
+    # `<release>-server` when that already contains "victorialogs",
+    # `<release>-victorialogs-server` otherwise -- so installing this chart under
+    # its own name gives `bodylog-victorialogs-server`, which nobody reading
+    # another chart's values would guess. Vector, the Grafana datasource and
+    # `helm test` all take the address from the subchart's own name template, so
+    # they follow whatever this is set to.
+    #
+    # It is per namespace: a second release of this chart in the SAME namespace
+    # has to be given a different name here, or the two Services collide.
+    fullnameOverride: victorialogs
     # A bare number here is MONTHS; always give a unit.
     retentionPeriod: 14d
     extraArgs:
@@ -121,6 +135,13 @@ test:
   image:
     repository: docker.io/curlimages/curl
     tag: 8.11.1
+  # How long to wait for VictoriaLogs to answer before failing. Not a retry for
+  # its own sake: an installer that does not wait for the release's pods -- helm
+  # without --wait, or helmfile, whose helmDefaults.wait is off -- gets here
+  # while VictoriaLogs is still ContainerCreating, and a single attempt fails a
+  # healthy install. A VictoriaLogs that is genuinely down still fails, it just
+  # takes this long to say so.
+  readyTimeoutSeconds: 180
   expectRecordsWithin: ""
 
 podAnnotations: {}

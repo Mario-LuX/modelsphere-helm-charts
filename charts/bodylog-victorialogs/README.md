@@ -43,8 +43,15 @@ helm test bodylog-victorialogs -n logging
   `vector.state.existingClaim`, or `vector.state.hostPath` with the
   caveat spelled out there.
 
+VictoriaLogs answers at `http://victorialogs.<namespace>.svc:9428` -- a fixed
+Service name (`victorialogs.server.fullnameOverride`), so another workload can be
+configured with it. Two releases of this chart in one namespace need different
+names there.
+
 `helm test` checks that VictoriaLogs answers at the URL Vector and Grafana are
-configured with, and that its query API works. On a router with steady traffic, set
+configured with, and that its query API works. It waits up to
+`test.readyTimeoutSeconds` for VictoriaLogs, because an installer that does not
+wait for pods gets there first. On a router with steady traffic, set
 `test.expectRecordsWithin=1h` to also require that records arrived recently.
 
 ## How it works
@@ -177,6 +184,7 @@ NOT resp_meta.finish_reason:"stop"
 | `bodylog.namespace` | release namespace | namespace of the bodylog pod |
 | `bodylog.podLabels` | `app.kubernetes.io/name: bodylog` | labels of the bodylog pod |
 | `victorialogs.enabled` | `true` | deploy VictoriaLogs; `false` needs `victorialogsUrl` |
+| `victorialogs.server.fullnameOverride` | `victorialogs` | the Service name, and so the address |
 | `victorialogs.server.retentionPeriod` | `14d` | |
 | `victorialogs.server.persistentVolume.size` | `100Gi` | see Sizing |
 | `vector.readFrom` | `end` | `beginning` ships the current day's files too |
@@ -192,4 +200,5 @@ NOT resp_meta.finish_reason:"stop"
 | `grafana.datasource.enabled` | `true` | |
 | `grafana.datasource.namespace` | `monitoring` | Grafana's namespace |
 | `test.image.repository` / `.tag` | `docker.io/curlimages/curl` / `8.11.1` | the `helm test` hook image |
+| `test.readyTimeoutSeconds` | `180` | how long `helm test` waits for VictoriaLogs |
 | `test.expectRecordsWithin` | `""` | e.g. `1h` |
