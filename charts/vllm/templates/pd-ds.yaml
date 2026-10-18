@@ -164,6 +164,11 @@ metadata:
     app: {{ $root.Release.Name }}-vllm
 spec:
   replicas: {{ $pd.router.replicas | default 1 }}
+  # Reuse the top-level value: the router pod's "no progress" window now has to
+  # cover the engine placement window too, because its init container blocks
+  # on the engines being scheduled. The default 7200 (hours) is the natural
+  # ceiling for a GPU autoscaler leg anyway.
+  progressDeadlineSeconds: {{ pluck "progressDeadlineSeconds" $root.Values $pd.router | first | default $root.Values.progressDeadlineSeconds | default 7200 }}
   selector:
     matchLabels:
       app: {{ $root.Release.Name }}-vllm
@@ -177,9 +182,36 @@ spec:
         slice: "{{ $s }}"
     spec:
       terminationGracePeriodSeconds: 30
+      {{- /* Placement gates init, not the router's boot script. An init
+             container can wait unbounded (no probes, no budget tension), and
+             while it runs kubectl shows Init:0/1 -- "never scheduled" is a
+             visible state, not a crashloop after a fuse. There is deliberately
+             NO timeout here: "insufficient resources" is indistinguishable
+             from "placement completes in an hour" from inside the pod, so the
+             loop just blocks until the full set shows up. */}}
+      initContainers:
+      - name: wait-upstreams
+        {{- $img := $pd.router.imageOverride | default dict }}
+        image: "{{ $img.repository | default "vllm/vllm-router" }}:{{ $img.tag | default "v0.1.16.1" }}"
+        command: ["bash", "-lc"]
+        args:
+        - |
+          set -e
+          PF_HL={{ $fullname }}-prefill-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
+          DC_HL={{ $fullname }}-decode-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
+          PF_WANT={{ $pd.prefill.replicas }}
+          DC_WANT={{ $pd.decode.replicas }}
+          n=1
+          while :; do
+            PF_HAVE=$(getent hosts "$PF_HL" | awk '{print $1}' | sort -u | wc -l)
+            DC_HAVE=$(getent hosts "$DC_HL" | awk '{print $1}' | sort -u | wc -l)
+            [ "$PF_HAVE" -ge "$PF_WANT" ] && [ "$DC_HAVE" -ge "$DC_WANT" ] && exit 0
+            echo "wait-upstreams: slice {{ $s }} not fully placed (prefill $PF_HAVE/$PF_WANT, decode $DC_HAVE/$DC_WANT; attempt $n)"
+            n=$((n+1))
+            sleep 5
+          done
       containers:
       - name: router
-        {{- $img := $pd.router.imageOverride | default dict }}
         image: "{{ $img.repository | default "vllm/vllm-router" }}:{{ $img.tag | default "v0.1.16.1" }}"
         command: ["bash", "-lc"]
         args:
@@ -189,12 +221,17 @@ spec:
           # IPs, then build repeated --prefill / --decode flags. getent prints
           # one line per backing pod for a headless Service.
           #
-          # The gate is a per-role leader count, not "at least one IP": with
-          # replicas>1 the first answer often returns only the leader already
-          # in DNS, and exiting here bakes a partial upstream list into argv
-          # for the life of the process. publishNotReadyAddresses means the
-          # address appears as soon as the pod has an IP, so this waits on
-          # scheduling, not on the engines going Ready.
+          # First-boot placement is already covered by the init container. This
+          # loop still matters after a router CONTAINER restart (drift liveness,
+          # OOM): DNS is re-resolved fresh and argv is re-baked from whatever
+          # the full placement set looks like now, so a restart that lands
+          # while another engine is being scheduled does not reload the router
+          # with the stale pre-restart set for good. The 300s fuse is only for
+          # that trigger; a set that still has not completed by then bounce-
+          # restarts via kubelet backoff until it does. publishNotReadyAddresses
+          # is what makes "wait for placement" possible at all: the address
+          # appears as soon as the pod has an IP, so the gate observes
+          # scheduling, not engine readiness.
           #
           # The two backend flavours of argv differ by side channel:
           #   - nixl     : no bootstrap port to propagate, no extra router
