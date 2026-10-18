@@ -131,9 +131,7 @@ spec:
         ports:
         - { containerPort: {{ $root.Values.service.port }}, name: router-http }
         env:
-          {{- with $root.Values.env }}
-          {{- toYaml . | nindent 8 }}
-          {{- end }}
+        {{- include "sglang.mergeEnv" (dict "chart" list "user" $root.Values.env "padding" 8) }}
         {{- if $hasModel }}
         volumeMounts:
         - name: model-storage

@@ -144,7 +144,7 @@ spec:
         {{- include "vllm.pdRouterProbes" (dict "roles" $probeRoles) | nindent 8 }}
         {{- with $root.Values.env }}
         env:
-          {{- toYaml . | nindent 8 }}
+        {{- include "vllm.mergeEnv" (dict "chart" list "user" . "padding" 8) }}
         {{- end }}
         {{- if $hasModel }}
         volumeMounts:

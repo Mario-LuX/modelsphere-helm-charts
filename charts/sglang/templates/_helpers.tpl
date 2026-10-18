@@ -135,3 +135,63 @@
 {{- end -}}
 {{- with $labels }}{{ toYaml . }}{{ end -}}
 {{- end -}}
+
+{{/*
+  Merge chart-supplied env entries with user env entries (Values.env), user-wins
+  on duplicate name, emitting a deduplicated item list for the call site to
+  plant under its own `env:` key.
+
+  The Kubernetes API rejects an env list with two entries of the same name --
+  "duplicate env name" from the server, and server-side apply in particular
+  fails outright rather than resolve last-wins the way the kubelet's $(VAR)
+  expansion does. With the chart's SGLANG_FORCE_SHUTDOWN pair or the cache
+  quartet enabled, a user that duplicates one via Values.env would otherwise
+  produce exactly that broken shape. This helper renders one entry per name
+  so apply succeeds; the user's value wins and the pod runs with it, whatever
+  it is.
+
+  Order: chart entries stay in the order the caller built them -- the
+  hang-watcher's LOG_FILE references $(POD_NS)/$(POD_NAME) declared upstream,
+  so position is load-bearing wherever $(VAR) expansion is used. A user entry
+  overwrites its chart twin IN PLACE so position is stable; non-colliding
+  user entries append at the end. Callers therefore emit their entries in
+  dependency order and treat Values.env as a pure overlay.
+
+  `mustAppend` returns a fresh list on every call, so `$out` is never a
+  mutation of the caller's `$chartEnv` -- colocate renders the same chart
+  list for two engine containers and each render starts from a clean copy.
+
+  Emits the item list only, indented by `padding` (default 2). No leading or
+  trailing newline of its own: the call site owns the `env:` key and how it
+  lines up with surrounding contexts. When both lists are empty the helper
+  emits the empty string, which keeps an unconditional `env:` key legal
+  (`env:` with a null child parses as a null value, matching what the chart
+  emitted before this helper existed).
+*/}}
+{{- define "sglang.mergeEnv" -}}
+{{- $padding := .padding | default 2 | int -}}
+{{- $out := list -}}
+{{- range (.chart | default list) -}}
+  {{- $out = mustAppend $out . -}}
+{{- end -}}
+{{- range $u := .user | default list -}}
+  {{- $merged := false -}}
+  {{- $next := list -}}
+  {{- range $e := $out -}}
+    {{- if and (not $merged) (eq $e.name $u.name) -}}
+      {{- $next = mustAppend $next $u -}}
+      {{- $merged = true -}}
+    {{- else -}}
+      {{- $next = mustAppend $next $e -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if $merged -}}
+    {{- $out = $next -}}
+  {{- else -}}
+    {{- $out = mustAppend $out $u -}}
+  {{- end -}}
+{{- end -}}
+{{- if $out -}}
+{{ toYaml $out | nindent $padding | trimSuffix "\n" }}
+{{- end -}}
+{{- end -}}

@@ -351,40 +351,38 @@
     - {{ . | quote }}
     {{- end }}
   {{- end }}
+  {{- /* Env is merged by sglang.mergeEnv: one entry per name, user value wins
+       on collision. Order of $chartEnv is preserved verbatim by the merge
+       helper, so the entries appear here in the same order the chart has
+       always emitted them. */}}
+  {{- /* false makes /health a plain status check. Left at SGLang's own
+       default (true) it runs a real 1-token generation, sleeps at least 1s
+       and can take 20s, which no sane probe timeout survives. */}}
+  {{- $chartEnv := list
+        (dict "name" "SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION" "value" (printf "%v" $root.Values.healthEndpointGeneration)) }}
+  {{- /* Makes SGLang skip its drain and exit as soon as SIGTERM arrives.
+
+       Both spellings, because upstream renamed it and the two live side by side
+       across the images in use: 0.5.10 still reads SGL_FORCE_SHUTDOWN but warns
+       ("deprecated, please use SGLANG_FORCE_SHUTDOWN"), and 0.5.15 has dropped it
+       entirely -- grep the package and the string is not there, so on 0.5.15 the
+       old name alone is a no-op and this whole switch does nothing. */}}
+  {{- if $root.Values.lifecycle.forceShutdown }}
+  {{- $chartEnv = concat $chartEnv (list
+        (dict "name" "SGLANG_FORCE_SHUTDOWN" "value" "1")
+        (dict "name" "SGL_FORCE_SHUTDOWN" "value" "1")) }}
+  {{- end }}
+  {{- /* The engine command runs under cache_manager.py (see the command forms
+       above); these tune the host-side slot pool it manages. */}}
+  {{- if $cacheEnabled }}
+  {{- $chartEnv = concat $chartEnv (list
+        (dict "name" "SGLANG_CACHE_HOST_DIR" "value" "/var/cache/sglang-host")
+        (dict "name" "SGLANG_CACHE_TEMPLATE_HASH" "value" (include "sglang.cacheTemplateHash" $root))
+        (dict "name" "SGLANG_CACHE_MAX_SLOTS" "value" (printf "%v" ($cache.maxSlotsPerNode | default 8)))
+        (dict "name" "SGLANG_CACHE_HISTORY_LIMIT" "value" (printf "%v" ($cache.historyLimit | default 2)))) }}
+  {{- end }}
   env:
-    # false makes /health a plain status check. Left at SGLang's own
-    # default (true) it runs a real 1-token generation, sleeps at least 1s
-    # and can take 20s, which no sane probe timeout survives.
-    - name: SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION
-      value: {{ $root.Values.healthEndpointGeneration | quote }}
-    {{- if $root.Values.lifecycle.forceShutdown }}
-    # Makes SGLang skip its drain and exit as soon as SIGTERM arrives.
-    #
-    # Both spellings, because upstream renamed it and the two live side by side
-    # across the images in use: 0.5.10 still reads SGL_FORCE_SHUTDOWN but warns
-    # ("deprecated, please use SGLANG_FORCE_SHUTDOWN"), and 0.5.15 has dropped it
-    # entirely -- grep the package and the string is not there, so on 0.5.15 the
-    # old name alone is a no-op and this whole switch does nothing.
-    - name: SGLANG_FORCE_SHUTDOWN
-      value: "1"
-    - name: SGL_FORCE_SHUTDOWN
-      value: "1"
-    {{- end }}
-    {{- if $cacheEnabled }}
-    # The engine command runs under cache_manager.py (see the command forms
-    # above); these tune the host-side slot pool it manages.
-    - name: SGLANG_CACHE_HOST_DIR
-      value: "/var/cache/sglang-host"
-    - name: SGLANG_CACHE_TEMPLATE_HASH
-      value: {{ include "sglang.cacheTemplateHash" $root | quote }}
-    - name: SGLANG_CACHE_MAX_SLOTS
-      value: {{ $cache.maxSlotsPerNode | default 8 | quote }}
-    - name: SGLANG_CACHE_HISTORY_LIMIT
-      value: {{ $cache.historyLimit | default 2 | quote }}
-    {{- end }}
-    {{- with $root.Values.env }}
-    {{- toYaml . | nindent 4 }}
-    {{- end }}
+  {{- include "sglang.mergeEnv" (dict "chart" $chartEnv "user" $root.Values.env "padding" 4) }}
   {{- if $serves }}
   ports:
   - containerPort: {{ $httpPort }}

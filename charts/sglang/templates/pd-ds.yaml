@@ -221,9 +221,7 @@ spec:
         ports:
         - { containerPort: {{ $root.Values.service.port }}, name: http }
         env:
-          {{- with $root.Values.env }}
-          {{- toYaml . | nindent 10 }}
-          {{- end }}
+        {{- include "sglang.mergeEnv" (dict "chart" list "user" $root.Values.env "padding" 10) }}
         volumeMounts:
         - name: model-storage
           mountPath: {{ $root.Values.model.mountPath }}

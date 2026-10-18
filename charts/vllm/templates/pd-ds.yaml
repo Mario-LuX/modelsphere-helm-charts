@@ -267,7 +267,7 @@ spec:
         {{- include "vllm.pdRouterLivenessProbe" (dict "roles" $probeRoles) | nindent 8 }}
         {{- with $root.Values.env }}
         env:
-          {{- toYaml . | nindent 8 }}
+        {{- include "vllm.mergeEnv" (dict "chart" list "user" . "padding" 8) }}
         {{- end }}
         volumeMounts:
         - name: model-storage
