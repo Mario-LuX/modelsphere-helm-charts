@@ -221,17 +221,18 @@ spec:
           # IPs, then build repeated --prefill / --decode flags. getent prints
           # one line per backing pod for a headless Service.
           #
-          # First-boot placement is already covered by the init container. This
-          # loop still matters after a router CONTAINER restart (drift liveness,
-          # OOM): DNS is re-resolved fresh and argv is re-baked from whatever
-          # the full placement set looks like now, so a restart that lands
-          # while another engine is being scheduled does not reload the router
-          # with the stale pre-restart set for good. The 300s fuse is only for
-          # that trigger; a set that still has not completed by then bounce-
-          # restarts via kubelet backoff until it does. publishNotReadyAddresses
-          # is what makes "wait for placement" possible at all: the address
-          # appears as soon as the pod has an IP, so the gate observes
-          # scheduling, not engine readiness.
+          # First-boot FULL placement is the init container's job; by the time
+          # this script runs, the full set has been placed at least once. On a
+          # router CONTAINER restart (drift liveness, OOM) the goal changes:
+          # get back to serving ASAP with whatever is placed now. So this loop
+          # does NOT count toward the full set -- it only refuses to exec with
+          # an EMPTY role list, which would be a router that can never route.
+          # Mid-life engine shrinkage is fine: argv keeps dead IPs and the
+          # router quarantines them itself, and growth is picked up by the
+          # drift liveness probe's restart. publishNotReadyAddresses is what
+          # makes placement observable at all -- the address appears as soon as
+          # the pod has an IP, so this sees scheduled engines, not just Ready
+          # ones.
           #
           # The two backend flavours of argv differ by side channel:
           #   - nixl     : no bootstrap port to propagate, no extra router
@@ -251,19 +252,15 @@ spec:
           #                demand.
           PF_HL={{ $fullname }}-prefill-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
           DC_HL={{ $fullname }}-decode-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
-          PF_WANT={{ $pd.prefill.replicas }}
-          DC_WANT={{ $pd.decode.replicas }}
           for i in $(seq 1 60); do
             PF_IPS=$(getent hosts "$PF_HL" | awk '{print $1}' | sort -u)
             DC_IPS=$(getent hosts "$DC_HL" | awk '{print $1}' | sort -u)
-            PF_HAVE=$(printf '%s\n' "$PF_IPS" | sed '/^$/d' | wc -l)
-            DC_HAVE=$(printf '%s\n' "$DC_IPS" | sed '/^$/d' | wc -l)
-            [ "$PF_HAVE" -ge "$PF_WANT" ] && [ "$DC_HAVE" -ge "$DC_WANT" ] && break
-            echo "router: waiting for slice {{ $s }} upstreams (prefill $PF_HAVE/$PF_WANT, decode $DC_HAVE/$DC_WANT; attempt $i)"
+            [ -n "$PF_IPS" ] && [ -n "$DC_IPS" ] && break
+            echo "router: slice {{ $s }} upstreams not yet resolving (prefill: '${PF_IPS:-none}', decode: '${DC_IPS:-none}'; attempt $i)"
             sleep 5
           done
-          if [ "$PF_HAVE" -lt "$PF_WANT" ] || [ "$DC_HAVE" -lt "$DC_WANT" ]; then
-            echo "router: timed out waiting for slice {{ $s }} upstreams: prefill $PF_HAVE/$PF_WANT, decode $DC_HAVE/$DC_WANT" >&2
+          if [ -z "$PF_IPS" ] || [ -z "$DC_IPS" ]; then
+            echo "router: timed out waiting for slice {{ $s }} upstreams to resolve: prefill '${PF_IPS:-none}', decode '${DC_IPS:-none}'" >&2
             exit 1
           fi
           PF_ARGS=""
