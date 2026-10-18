@@ -181,7 +181,14 @@ spec:
         component: router
         slice: "{{ $s }}"
     spec:
-      terminationGracePeriodSeconds: 30
+      # The router's own budget, NOT the engines'. 30s was sized for a front-end
+      # that answers short-lived HTTP; the pd router holds long-lived streams
+      # back to prefill and decode, and a hard SIGKILL mid-request leaves the
+      # client facing an aborted stream and the peer engines holding half-
+      # finished KV state. 600s gives in-flight requests and router-side
+      # cancellation propagation a real window; the pod is not GPU-bearing, so
+      # holding it longer costs only node bookkeeping.
+      terminationGracePeriodSeconds: 600
       {{- /* Placement gates init, not the router's boot script. An init
              container can wait unbounded (no probes, no budget tension), and
              while it runs kubectl shows Init:0/1 -- "never scheduled" is a
