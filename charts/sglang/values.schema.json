@@ -140,6 +140,38 @@
         "enabled": { "type": "boolean" },
         "colocate": { "type": "boolean" },
         "transferBackend": { "type": "string", "enum": ["mooncake"] },
+        "rolloutStrategy": {
+          "description": "pd-ds DS-role rolling strategy override. LWS-shape (rollingUpdateConfiguration), the same field shape the lws block uses. Unset renders the chart's atomic default: maxSurge 0, maxUnavailable = role replicas.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": { "type": "string", "enum": ["RollingUpdate"] },
+            "rollingUpdateConfiguration": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "maxSurge": { "$ref": "#/definitions/intOrPercent" },
+                "maxUnavailable": { "$ref": "#/definitions/intOrPercent" }
+              }
+            }
+          }
+        },
+        "colocateStrategy": {
+          "description": "pd-colocate Deployment strategy override. Deployment-shape (rollingUpdate), matching the top-level strategy field the chart forwards elsewhere. Unset renders the chart's atomic default: maxSurge 0, maxUnavailable = replicaCount.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": { "type": "string", "enum": ["RollingUpdate", "Recreate"] },
+            "rollingUpdate": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "maxSurge": { "$ref": "#/definitions/intOrPercent" },
+                "maxUnavailable": { "$ref": "#/definitions/intOrPercent" }
+              }
+            }
+          }
+        },
         "prefill": { "$ref": "#/definitions/pdRole" },
         "decode": { "$ref": "#/definitions/pdRole" },
         "router": {

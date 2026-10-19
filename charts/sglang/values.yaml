@@ -147,6 +147,20 @@ pd:
   colocate: false
   transferBackend: mooncake       # only mooncake today
 
+  # Rollout policy for both pd shapes. pd is one all-or-nothing service --
+  # HA lives at the tier above (slices / releases draining through the front
+  # door), not inside the engine fleet. Default: burst-replace the whole
+  # role / appliance (maxSurge: 0 keeps a full GPU cluster schedulable;
+  # maxUnavailable: <role replicas> or <replicaCount> makes the controller
+  # delete every old group at once before creating the new set). Optional
+  # override keys: pd.rolloutStrategy for the DS roles, pd.colocateStrategy
+  # for the merged colocate Deployment. When unset, the atomic default wins;
+  # set one to take control of pd's rollout. Plain-LWS / non-pd Deployment
+  # rollouts are NOT covered -- they keep using lws.rolloutStrategy /
+  # strategy as before.
+  # rolloutStrategy: {}
+  # colocateStrategy: {}
+
   # The two roles. A/B roles render one leaderWorkerTemplate each; colocate
   # renders one CONTAINER each inside the merged pod (and ignores everything
   # that is fundamentally a per-pod or per-copy setting).
