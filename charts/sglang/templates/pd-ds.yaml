@@ -247,9 +247,74 @@ spec:
           # Persist the boot-time upstream set for the liveness drift probe.
           # Router argv is immutable for the life of the process, so the file
           # is the probe's only handle on "what upstreams were baked in".
+          #
+          # Each line is "<ip>|<restarts>|<watcher_started_at>" from the
+          # engine pod's hang-watcher /engine endpoint. The ip alone isn't a
+          # stable identity: sglang-router pins bootstrap info at boot on
+          # TOP of the IP, so an engine that crashes and is restarted in place
+          # by the kubelet keeps its IP but swaps engine_id -- the router's
+          # transfer sessions then point at a dead incarnation while DNS
+          # shows nothing new. Comparing (restarts, watcher_started_at) is
+          # version-agnostic: any hang-watcher that exposes /engine yields a
+          # fresh tuple for every engine process replacement.
+          #
+          # HW_PORT=0 is the "sidecar disabled at render time" sentinel and
+          # behaves identically to the older-sidecar 404: record "<ip>||" and
+          # move on, the runtime probe treats both as "no identity info".
+          # 503 = sidecar alive but engine id not yet pinned; retry up to
+          # 90min, then give up and record the same sentinel (fail-open:
+          # identity unknown is not a reason to keep the router from ever
+          # booting). engine not yet listening (conn refused) and CoreDNS
+          # slop (timeout) also retry on the same budget.
+          HW_PORT={{ ternary (int $root.Values.hangWatcher.port) 0 $root.Values.hangWatcher.enabled }}
+          probe_identity() {
+            local ip=$1 budget=${2:-5400} waited=0
+            [ "$HW_PORT" -eq 0 ] && { echo '|'; return 0; }
+            while :; do
+              local out
+              # python3 heredoc: body and terminator sit at the block scalar's
+              # own indent, so the rendered yaml strips them to column 0 for
+              # bash+python. Exit 0 prints '<restarts>|<ts>' on 200 or '|' on
+              # 404 sentinel; exit 2 on 503 / conn refused / timeout / bad
+              # json = transient, caller retries on its own budget.
+              out=$(python3 - "$ip" "$HW_PORT" <<'PY' 2>/dev/null
+          import json, sys, urllib.request, urllib.error
+          ip, port = sys.argv[1], sys.argv[2]
+          try:
+              r = urllib.request.urlopen(f"http://{ip}:{port}/engine", timeout=5)
+              j = json.loads(r.read())
+              print(f"{j['restarts']}|{j['watcher_started_at']}")
+          except urllib.error.HTTPError as e:
+              if e.code == 404:
+                  print('|')
+              else:
+                  sys.exit(2)
+          except Exception:
+              sys.exit(2)
+          PY
+          )
+              local rrc=$?
+              if [ $rrc -eq 0 ]; then echo "$out"; return 0; fi
+              if [ $waited -ge $budget ]; then
+                echo "router: $ip identity probe gave no usable answer after ${budget}s; recording ip||" >&2
+                echo '|'; return 0
+              fi
+              sleep 10; waited=$((waited+10))
+            done
+          }
           install -d -m 0755 /run/pd-router
-          T=$(mktemp -p /run/pd-router); printf '%s\n' "$PF_IPS" >"$T"; mv "$T" /run/pd-router/prefill-ips
-          T=$(mktemp -p /run/pd-router); printf '%s\n' "$DC_IPS" >"$T"; mv "$T" /run/pd-router/decode-ips
+          write_role_snapshot() {
+            local role=$1 ips=$2
+            local T=$(mktemp -p /run/pd-router)
+            local ip id
+            for ip in $ips; do
+              id=$(probe_identity "$ip")
+              printf '%s|%s\n' "$ip" "$id" >>"$T"
+            done
+            mv "$T" "/run/pd-router/${role}-ips"
+          }
+          write_role_snapshot prefill "$PF_IPS"
+          write_role_snapshot decode  "$DC_IPS"
           # shellcheck disable=SC2086
           exec python3 -m sglang_router.launch_router \
             --pd-disaggregation \
@@ -273,7 +338,7 @@ spec:
         {{- /* Drift liveness: restart the router if a new prefill/decode IP
                appears in DNS after boot -- argv is immutable and the running
                router can never learn about post-boot upstreams. */}}
-        {{- include "sglang.pdRouterLivenessProbe" (dict "roles" (dict
+        {{- include "sglang.pdRouterLivenessProbe" (dict "root" $root "roles" (dict
              "prefill" (dict "host" (printf "%s-prefill-hl-s%d.%s.svc.cluster.local." $fullname $s $root.Release.Namespace) "port" ($pd.prefill.httpPort | default 30001))
              "decode"  (dict "host" (printf "%s-decode-hl-s%d.%s.svc.cluster.local."  $fullname $s $root.Release.Namespace) "port" ($pd.decode.httpPort  | default 30002)))) | nindent 8 }}
         ports:
