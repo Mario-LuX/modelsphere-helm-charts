@@ -43,14 +43,24 @@ spec:
   selector:
     matchLabels:
       app: {{ $root.Release.Name }}-vllm
-  {{- with $root.Values.strategy }}
+  {{- /* pd-colocate rolls atomically by default: the appliance is one
+         all-or-nothing PD unit, HA lives at the tier above. Same pd-owned
+         knob split as pd-ds: reads pd.colocateStrategy, not the top-level
+         strategy (the chart's own values.yaml sets strategy for plain
+         Deployments, so inheriting it would silently lose the atomic
+         default). A user pd.colocateStrategy wins. */}}
   strategy:
-    {{- if eq (.type | default "RollingUpdate") "Recreate" }}
-    {{- toYaml (omit . "rollingUpdate") | nindent 4 }}
+    {{- $defaultStrategy := dict "type" "RollingUpdate" "rollingUpdate" (dict "maxSurge" 0 "maxUnavailable" $root.Values.replicaCount) -}}
+    {{- $strategy := $pd.colocateStrategy | default $defaultStrategy -}}
+    {{- $strategyType := $strategy.type | default "RollingUpdate" -}}
+    {{- if eq $strategyType "Recreate" }}
+    {{- toYaml $strategy | nindent 2 }}
     {{- else }}
-    {{- toYaml . | nindent 4 }}
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: {{ dig "rollingUpdate" "maxSurge" 0 $strategy }}
+      maxUnavailable: {{ dig "rollingUpdate" "maxUnavailable" $root.Values.replicaCount $strategy }}
     {{- end }}
-  {{- end }}
   {{- with $root.Values.progressDeadlineSeconds }}
   progressDeadlineSeconds: {{ . }}
   {{- end }}

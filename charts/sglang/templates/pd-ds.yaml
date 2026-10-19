@@ -42,7 +42,24 @@ spec:
       startupPolicy: {{ $lws.startupPolicy }}
       networkConfig:
         subdomainPolicy: {{ $lws.subdomainPolicy }}
-      {{- with $lws.rolloutStrategy }}
+      {{- /* PD upgrades default to atomic per role: the whole xPyD set is one
+             service, and "keep traffic running during an upgrade" is a property
+             of the tier above (multiple slices / releases draining through the
+             front door), not of the engine fleet itself. Surge 0 frees the old
+             groups' GPUs before the new ones schedule (full cluster friendly);
+             unavailable = the role's group count makes the controller delete
+             every old group at once and only then create the new set. A user
+             lws.rolloutStrategy still wins when set -- most pd values files
+             never touch it, so the default is what they'll see. */}}
+      {{- /* PD upgrades default to atomic per role: the whole xPyD set is one
+             service, HA lives at the tier above (slices / releases draining
+             through the front door), not the engine fleet. Surge 0 keeps a
+             full cluster schedulable; unavailable = the role's group count
+             makes the controller delete every old group at once. pd-owned
+             knob (pd.rolloutStrategy, not lws.rolloutStrategy): the chart
+             itself sets lws.rolloutStrategy, so inheriting it would make this
+             default dead in every render. A user pd.rolloutStrategy wins. */}}
+      {{- with ($pd.rolloutStrategy | default (dict "type" "RollingUpdate" "rollingUpdateConfiguration" (dict "maxSurge" 0 "maxUnavailable" $roleCfg.replicas))) }}
       rolloutStrategy:
         {{- toYaml . | nindent 8 }}
       {{- end }}
