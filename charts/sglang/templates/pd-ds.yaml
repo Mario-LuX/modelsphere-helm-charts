@@ -130,6 +130,11 @@ metadata:
     app: {{ $root.Release.Name }}-sglang
 spec:
   replicas: {{ $pd.router.replicas | default 1 }}
+  # Reuse the top-level value: the router pod's "no progress" window now has to
+  # cover the engine placement window too, because its init container blocks
+  # on the engines being scheduled. The default 7200 (hours) is the natural
+  # ceiling for a GPU autoscaler leg anyway.
+  progressDeadlineSeconds: {{ pluck "progressDeadlineSeconds" $root.Values $pd.router | first | default $root.Values.progressDeadlineSeconds | default 7200 }}
   selector:
     matchLabels:
       app: {{ $root.Release.Name }}-sglang
@@ -142,10 +147,44 @@ spec:
         component: router
         slice: "{{ $s }}"
     spec:
-      terminationGracePeriodSeconds: 30
+      # The router's own budget, NOT the engines'. 30s was sized for a front-end
+      # that answers short-lived HTTP; the pd router holds long-lived streams
+      # back to prefill and decode, and a hard SIGKILL mid-request leaves the
+      # client facing an aborted stream and the peer engines holding half-
+      # finished KV state. 600s gives in-flight requests and router-side
+      # cancellation propagation a real window; the pod is not GPU-bearing, so
+      # holding it longer costs only node bookkeeping.
+      terminationGracePeriodSeconds: 600
+      {{- /* Placement gates init, not the router's boot script. An init
+             container can wait unbounded (no probes, no budget tension), and
+             while it runs kubectl shows Init:0/1 -- "never scheduled" is a
+             visible state, not a crashloop after a fuse. There is deliberately
+             NO timeout here: "insufficient resources" is indistinguishable
+             from "placement completes in an hour" from inside the pod, so the
+             loop just blocks until the full set shows up. */}}
+      initContainers:
+      - name: wait-upstreams
+        {{- $img := $pd.router.imageOverride | default dict }}
+        image: "{{ $img.repository | default $root.Values.image.repository }}:{{ $img.tag | default $root.Values.image.tag }}"
+        command: ["bash", "-lc"]
+        args:
+        - |
+          set -e
+          PF_HL={{ $fullname }}-prefill-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
+          DC_HL={{ $fullname }}-decode-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
+          PF_WANT={{ $pd.prefill.replicas }}
+          DC_WANT={{ $pd.decode.replicas }}
+          n=1
+          while :; do
+            PF_HAVE=$(getent hosts "$PF_HL" | awk '{print $1}' | sort -u | wc -l)
+            DC_HAVE=$(getent hosts "$DC_HL" | awk '{print $1}' | sort -u | wc -l)
+            [ "$PF_HAVE" -ge "$PF_WANT" ] && [ "$DC_HAVE" -ge "$DC_WANT" ] && exit 0
+            echo "wait-upstreams: slice {{ $s }} not fully placed (prefill $PF_HAVE/$PF_WANT, decode $DC_HAVE/$DC_WANT; attempt $n)"
+            n=$((n+1))
+            sleep 5
+          done
       containers:
       - name: router
-        {{- $img := $pd.router.imageOverride | default dict }}
         image: "{{ $img.repository | default $root.Values.image.repository }}:{{ $img.tag | default $root.Values.image.tag }}"
         command: ["bash", "-lc"]
         args:
@@ -157,27 +196,29 @@ spec:
           # is handed to --prefill explicitly -- never let smg default it (the
           # decode side would connect back to its own port).
           #
-          # The gate is a per-role leader count, not "at least one IP": with
-          # replicas>1 the first answer often returns only the leader already
-          # in DNS, and exiting here bakes a partial upstream list into argv
-          # for the life of the process. publishNotReadyAddresses means the
-          # address appears as soon as the pod has an IP, so this waits on
-          # scheduling, not on the engines going Ready.
+          # First-boot FULL placement is the init container's job; by the time
+          # this script runs, the full set has been placed at least once. On a
+          # router CONTAINER restart (drift liveness, OOM) the goal changes:
+          # get back to serving ASAP with whatever is placed now. So this loop
+          # does NOT count toward the full set -- it only refuses to exec with
+          # an EMPTY role list, which would be a router that can never route.
+          # Mid-life engine shrinkage is fine: argv keeps dead IPs and the
+          # router quarantines them itself, and growth is picked up by the
+          # drift liveness probe's restart. publishNotReadyAddresses is what
+          # makes placement observable at all -- the address appears as soon as
+          # the pod has an IP, so this sees scheduled engines, not just Ready
+          # ones.
           PF_HL={{ $fullname }}-prefill-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
           DC_HL={{ $fullname }}-decode-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
-          PF_WANT={{ $pd.prefill.replicas }}
-          DC_WANT={{ $pd.decode.replicas }}
           for i in $(seq 1 60); do
             PF_IPS=$(getent hosts "$PF_HL" | awk '{print $1}' | sort -u)
             DC_IPS=$(getent hosts "$DC_HL" | awk '{print $1}' | sort -u)
-            PF_HAVE=$(printf '%s\n' "$PF_IPS" | sed '/^$/d' | wc -l)
-            DC_HAVE=$(printf '%s\n' "$DC_IPS" | sed '/^$/d' | wc -l)
-            [ "$PF_HAVE" -ge "$PF_WANT" ] && [ "$DC_HAVE" -ge "$DC_WANT" ] && break
-            echo "router: waiting for slice {{ $s }} upstreams (prefill $PF_HAVE/$PF_WANT, decode $DC_HAVE/$DC_WANT; attempt $i)"
+            [ -n "$PF_IPS" ] && [ -n "$DC_IPS" ] && break
+            echo "router: slice {{ $s }} upstreams not yet resolving (prefill: '${PF_IPS:-none}', decode: '${DC_IPS:-none}'; attempt $i)"
             sleep 5
           done
-          if [ "$PF_HAVE" -lt "$PF_WANT" ] || [ "$DC_HAVE" -lt "$DC_WANT" ]; then
-            echo "router: timed out waiting for slice {{ $s }} upstreams: prefill $PF_HAVE/$PF_WANT, decode $DC_HAVE/$DC_WANT" >&2
+          if [ -z "$PF_IPS" ] || [ -z "$DC_IPS" ]; then
+            echo "router: timed out waiting for slice {{ $s }} upstreams to resolve: prefill '${PF_IPS:-none}', decode '${DC_IPS:-none}'" >&2
             exit 1
           fi
           PF_ARGS=""
