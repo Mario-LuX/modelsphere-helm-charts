@@ -206,8 +206,15 @@
        'write-policy' maps to --hicache-write-policy). Knobs the user leaves
        null simply do not appear -- sglang's engine defaults apply.
        Compatibility between knobs is the engine's argparse/hook check,
-       not the chart's. */}}
-{{- $l2 := and $root.Values.localKVOffload.enabled (eq ($root.Values.localKVOffload.backend | default "") "hicache") }}
+       not the chart's.
+       PD decode pods must never receive a bare --enable-hierarchical-cache:
+       the engine's PD hook forces disable_radix_cache=True on decode, and the
+       pair is mutually exclusive (kv_cache_hook raises ValueError before
+       model load). Decode-side offload is a separate engine feature
+       (--disaggregation-decode-enable-offload-kvcache) and is out of scope
+       here. */}}
+{{- $isPdDecode := and $pdRole (not (hasPrefix "prefill-" $role)) }}
+{{- $l2 := and $root.Values.localKVOffload.enabled (eq ($root.Values.localKVOffload.backend | default "") "hicache") (not $isPdDecode) }}
 {{- if $l2 }}
 {{- $flags = append $flags "--enable-hierarchical-cache" }}
 {{- range $key, $val := $root.Values.localKVOffload.hicache }}
