@@ -269,7 +269,13 @@ spec:
           HW_PORT={{ ternary (int $root.Values.hangWatcher.port) 0 $root.Values.hangWatcher.enabled }}
           probe_identity() {
             local ip=$1 budget=${2:-5400} waited=0
-            [ "$HW_PORT" -eq 0 ] && { echo '|'; return 0; }
+            # The function returns the tuple on stdout; all breadcrumb logs
+            # go to stderr so they land in the container log instead of
+            # polluting the captured return value.
+            [ "$HW_PORT" -eq 0 ] && {
+              echo "router: $ip identity sentinel (hangWatcher disabled at render)" >&2
+              echo '|'; return 0
+            }
             while :; do
               local out
               # python3 heredoc: body and terminator sit at the block scalar's
@@ -294,7 +300,14 @@ spec:
           PY
           )
               local rrc=$?
-              if [ $rrc -eq 0 ]; then echo "$out"; return 0; fi
+              if [ $rrc -eq 0 ]; then
+                if [ "$out" = '|' ]; then
+                  echo "router: $ip identity sentinel (sidecar has no /engine)" >&2
+                else
+                  echo "router: $ip identity $out" >&2
+                fi
+                echo "$out"; return 0
+              fi
               if [ $waited -ge $budget ]; then
                 echo "router: $ip identity probe gave no usable answer after ${budget}s; recording ip||" >&2
                 echo '|'; return 0
@@ -315,6 +328,7 @@ spec:
           }
           write_role_snapshot prefill "$PF_IPS"
           write_role_snapshot decode  "$DC_IPS"
+          echo "router: boot script done, exec into router" >&2
           # shellcheck disable=SC2086
           exec python3 -m sglang_router.launch_router \
             --pd-disaggregation \
