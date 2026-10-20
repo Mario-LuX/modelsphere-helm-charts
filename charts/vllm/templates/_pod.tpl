@@ -996,9 +996,10 @@ exit 0
        vllm.pdRouterProbes -- separate concerns. */ -}}
 {{- define "vllm.pdRouterLivenessProbe" -}}
 {{- $roles := .roles -}}
+{{- $root := .root -}}
 livenessProbe:
   exec:
-    command: ["bash", "-lc", {{ include "vllm.pdRouterLivenessProbeScript" (dict "roles" $roles) | quote }}]
+    command: ["bash", "-lc", {{ include "vllm.pdRouterLivenessProbeScript" (dict "root" $root "roles" $roles) | quote }}]
   periodSeconds: 10
   timeoutSeconds: 10
   failureThreshold: 2
@@ -1006,23 +1007,88 @@ livenessProbe:
 
 {{- define "vllm.pdRouterLivenessProbeScript" -}}
 {{- $roles := .roles -}}
+{{- $root := .root -}}
 set -u
 rc=0
+HW_PORT={{ ternary (int $root.Values.hangWatcher.port) 0 $root.Values.hangWatcher.enabled }}
+# Read the engine-side identity that the router boot script recorded for $ip.
+# Empty tuple means "no identity info" -- old sidecar, HW_PORT=0 at boot, or
+# the boot-time 90min budget exhausted. The live probe below returns '|' for
+# the same condition. Fires iff the two sides disagree on identity: boot said
+# sentinel while live says real (identity appeared late), OR boot said real
+# while live says a different real (engine restarted in place).
+want_of() { awk -F'|' -v ip="$1" '$1==ip { print $2"|"$3; exit }' "$2"; }
+# Probe the live identity. 404 = old sidecar, same as boot sentinel; any
+# other non-200 (503 mid-id-pin, conn refused, timeout) = skip-tick. Both
+# shapes return exactly one parseable line on success and nothing else.
+live_id() {
+  local ip=$1
+  [ "$HW_PORT" -eq 0 ] && { echo '|'; return 0; }
+  python3 - "$ip" "$HW_PORT" <<'PY' 2>/dev/null
+import json, sys, urllib.request, urllib.error
+ip, port = sys.argv[1], sys.argv[2]
+try:
+    r = urllib.request.urlopen(f"http://{ip}:{port}/engine", timeout=2)
+    j = json.loads(r.read())
+    print(f"{j['restarts']}|{j['watcher_started_at']}")
+except urllib.error.HTTPError as e:
+    if e.code == 404:
+        print('|')
+    else:
+        sys.exit(2)
+except Exception:
+    sys.exit(2)
+PY
+}
 check() {
   local role=$1 svc=$2 file="/run/pd-router/$3" port=$4
   [ -f "$file" ] || return 0
   local ip
   while read -r ip; do
     [ -n "$ip" ] || continue
-    grep -qx "$ip" "$file" && continue
-    # New IP not in argv. Only count drift once it is actually SERVING:
-    # restarting into a still-loading engine is wasted (router can't route
-    # to it) and on engines whose router blocks its own listener on a
-    # per-upstream bootstrap handshake (vllm + mooncake), is actively
-    # harmful -- the whole slice sits dark until the retry budget drains.
-    # Short timeout so a slow engine never stalls the probe itself.
+    # Fast path: does this ip appear in the boot snapshot at all. Fixed-string
+    # match on the ip+pipe prefix -- '|' is a regex meta and would silently
+    # mis-grep (e.g. '10' matching '1.0.x.x'). -F treats it as text.
+    grep -qF "$ip|" "$file" || { unknown_ip=1; }
+    if [ "${unknown_ip:-0}" -eq 1 ]; then
+      # New IP not in argv. Only count drift once it is actually SERVING:
+      # restarting into a still-loading engine is wasted (router can't route
+      # to it) and on engines whose router blocks its own listener on a
+      # per-upstream bootstrap handshake (vllm + mooncake), is actively
+      # harmful -- the whole slice sits dark until the retry budget drains.
+      # Short timeout so a slow engine never stalls the probe itself.
+      if python3 -c "import urllib.request; urllib.request.urlopen('http://$ip:$port/health', timeout=2)" 2>/dev/null; then
+        echo "router stale: $role upstream $ip serving but not in argv" >&2
+        rc=1
+      fi
+      unknown_ip=0
+      continue
+    fi
+    # IP is in argv. Compare identities. want comes from the boot snapshot,
+    # live comes from the sidecar NOW; both may be the '|' sentinel for "no
+    # identity info". Any disagreement means the engine behind this IP is no
+    # longer the incarnation the router argv pined at boot:
+    #
+    #   want REAL, live REAL, different -> in-place restart  (the mooncake
+    #     boot-pinned engine_id can't see this on its own).
+    #   want '|', live REAL              -> identity arrived after boot (slow
+    #     sidecar, or boot budget exhausted mid-model-load). Restart so the
+    #     router re-snapshots with identity -- otherwise that IP stays
+    #     protected-by-silence for the life of this router process.
+    #   want REAL, live '|'              -> probe flake or sidecar wedged.
+    #     We can't tell; treat as no data and skip. An actually-restarted
+    #     engine answers with a REAL different id, so we do NOT miss the
+    #     real engine-swap case by skipping this one.
+    #
+    # Probe errors (skip-tick) are the same rule 1f0d236 uses for DNS blips:
+    # never fire on a missing answer, only when both sides positively
+    # answered and they disagree.
+    want=$(want_of "$ip" "$file")
+    live=$(live_id "$ip") || continue    # probe failed: skip-tick
+    [ "$live" = '|' ] && continue        # live has no data; skip
+    [ "$live" = "$want" ] && continue
     if python3 -c "import urllib.request; urllib.request.urlopen('http://$ip:$port/health', timeout=2)" 2>/dev/null; then
-      echo "router stale: $role upstream $ip serving but not in argv" >&2
+      echo "router stale: $role upstream $ip identity changed ($want -> $live) while serving" >&2
       rc=1
     fi
   done < <(timeout 2 getent hosts "$svc" 2>/dev/null | awk '{print $1}' | sort -u)
