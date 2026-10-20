@@ -609,7 +609,12 @@ hangWatcher:
     # silently (unknown JSON fields are dropped), so the grace period would look
     # configured and do nothing -- pin the tag rather than rely on the cluster
     # happening to run a new enough image.
-    tag: "0.1.26"
+    # >= 0.1.27 is required for GET /engine, the endpoint the pd router's
+    # drift-liveness probe uses to detect in-place engine restart. Older
+    # sidecars return 404 and the chart falls back to pre-identity behavior
+    # (IP-growth only) -- silent, no log. If you must run an older sidecar,
+    # expect that failure mode not this protection.
+    tag: "0.1.27"
   port: 9090                 # /healthz port (just needs to differ from service.port)
   # Thresholds -> ConfigMap the sidecar hot-reloads (helm upgrade retunes, no pod restart).
   config:
