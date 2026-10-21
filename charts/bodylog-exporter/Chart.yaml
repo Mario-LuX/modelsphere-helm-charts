@@ -6,16 +6,10 @@ sources:
   - https://github.com/modelsphere/helm-charts
   - https://github.com/modelsphere/llm-openresty
 type: application
-# The chart version tracks appVersion for this chart, so the chart and the image
-# it ships share one number. Not a rule for every chart here: cart carries a
-# chart version of its own, independent of the app it ships.
-version: 0.3.3
+# The chart version is independent of appVersion; bump it on every change.
+version: 0.3.4
 # The exporter image tag: values.image.tag is empty by default and falls back to
-# this, so a release moves both together.
-#
-# 0.2.6 is the actual release line -- it is the newest exporter/v* tag upstream,
-# the version ChartMuseum serves, and the image the clusters run. "1.0.0" was a
-# placeholder that an internal pipeline rewrote from the tag at publish time, so
-# it named a release that never existed, and no such image was ever built.
-appVersion: "0.2.8"
+# this, so a release moves both together. It names an exporter/v* release of
+# modelsphere/llm-openresty, published as 4pdosc/bodylog-exporter:<appVersion>.
+appVersion: "0.2.11"
 keywords: [bodylog, exporter, prometheus, observability]
