@@ -1,2 +1,4 @@
 test-cache-manager.py
 __pycache__/
+# helm-unittest suites, not part of the packaged chart
+tests/

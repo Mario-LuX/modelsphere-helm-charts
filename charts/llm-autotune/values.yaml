@@ -60,6 +60,11 @@ corsOrigins: "*"
 #       value: "23:00"
 #     - name: AUTOTUNE_LLMBENCH_API_KEY
 #       valueFrom: {secretKeyRef: {name: autotune-llmbench, key: api-key}}
+#
+# Bare numbers and bools are rendered as strings (EnvVar.value is a string),
+# but YAML parses some literals before the chart sees them: 0755 arrives as
+# 493, 0x1F as 31, and yes/no/on/off as true/false. Quote such a value
+# ("0755", "yes") to keep it as written.
 extraEnv: []
 
 # The cluster's DNS domain. The UI's nginx resolves the API service by its fully

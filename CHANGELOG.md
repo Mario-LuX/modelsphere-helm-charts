@@ -22,6 +22,8 @@ the chart history is there and in `git log charts/<chart>`, not in this file.
   `values.schema.json` or vendored subcharts without raising its `Chart.yaml`
   version (`hack/check-chart-version.sh`). Such a change would otherwise merge
   and never be published, because release.yml skips versions already released.
+- CI runs the helm-unittest suites of every chart that has a `tests/`
+  directory (`helm unittest`).
 
 ### Changed
 - GitHub Actions in `check-images.yml` and `release.yml` pinned to commit SHAs.

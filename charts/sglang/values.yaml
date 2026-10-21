@@ -1034,6 +1034,10 @@ modelRoute:
 
 # Additional environment variables on the SGLang container. Merged with
 # SGL_FORCE_SHUTDOWN when lifecycle.forceShutdown is on.
+# Bare numbers and bools are rendered as strings (EnvVar.value is a string),
+# but YAML parses some literals before the chart sees them: 0755 arrives as
+# 493, 0x1F as 31, and yes/no/on/off as true/false. Quote such a value
+# ("0755", "yes") to keep it as written.
 env: []
   # - name: HF_TOKEN
   #   valueFrom:

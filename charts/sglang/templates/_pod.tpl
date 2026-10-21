@@ -116,7 +116,7 @@
 {{- $homeFromValueFrom := false }}
 {{- range $root.Values.env }}
 {{- if eq .name "HOME" }}
-{{- if and (hasKey . "value") (ne (toString .value) "") }}
+{{- if and (hasKey . "value") (ne (include "sglang.envValueString" .value) "") }}
 {{- $homeFromEnv = true }}
 {{- else if hasKey . "valueFrom" }}
 {{- $homeFromValueFrom = true }}

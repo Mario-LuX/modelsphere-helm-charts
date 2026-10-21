@@ -1,0 +1,513 @@
+# Env values reach the Kubernetes API as strings, whatever YAML type the
+# values file gave them: EnvVar.value is a string and server-side apply
+# rejects a number or a bool ("expected string, got int", issue #76).
+suite: env values render as strings
+release:
+  name: ci
+set:
+  modelRoute.nginx.outputConfigMap: ci/openresty-conf
+  env:
+    - name: ZERO
+      value: 0
+    - name: ONE
+      value: 1
+    - name: BIG
+      value: 1000000000
+    - name: FLOAT
+      value: 0.5
+    - name: ENABLED
+      value: true
+    - name: QUOTED
+      value: "8"
+    - name: FROM_FIELD
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.name
+tests:
+  - it: single-node engine container
+    template: templates/deployment.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: ZERO
+            value: "0"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: ONE
+            value: "1"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: BIG
+            value: "1000000000"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: FLOAT
+            value: "0.5"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: QUOTED
+            value: "8"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: FROM_FIELD
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+
+  - it: pd colocate, both engine containers and the router
+    template: templates/pd-colocate.yaml
+    set:
+      pd.colocate: true
+      pd.enabled: true
+      pd.prefill.gpus: 1
+      pd.decode.gpus: 1
+      rdma.enabled: true
+      scaler.enabled: false
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: ZERO
+            value: "0"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: ONE
+            value: "1"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: BIG
+            value: "1000000000"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: FLOAT
+            value: "0.5"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: QUOTED
+            value: "8"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: FROM_FIELD
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm1")].env
+          content:
+            name: ZERO
+            value: "0"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm1")].env
+          content:
+            name: ONE
+            value: "1"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm1")].env
+          content:
+            name: BIG
+            value: "1000000000"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm1")].env
+          content:
+            name: FLOAT
+            value: "0.5"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm1")].env
+          content:
+            name: ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm1")].env
+          content:
+            name: QUOTED
+            value: "8"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm1")].env
+          content:
+            name: FROM_FIELD
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "router")].env
+          content:
+            name: ZERO
+            value: "0"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "router")].env
+          content:
+            name: ONE
+            value: "1"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "router")].env
+          content:
+            name: BIG
+            value: "1000000000"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "router")].env
+          content:
+            name: FLOAT
+            value: "0.5"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "router")].env
+          content:
+            name: ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "router")].env
+          content:
+            name: QUOTED
+            value: "8"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "router")].env
+          content:
+            name: FROM_FIELD
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+
+  - it: pd disaggregated, every role's leader and worker
+    template: templates/pd-ds.yaml
+    set:
+      pd.colocate: false
+      pd.enabled: true
+      pd.prefill.gpus: 1
+      pd.decode.gpus: 1
+      rdma.enabled: true
+      scaler.enabled: false
+    documentSelector:
+      path: kind
+      value: DisaggregatedSet
+    asserts:
+      - contains:
+          path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: ZERO
+            value: "0"
+      - contains:
+          path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: ONE
+            value: "1"
+      - contains:
+          path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: BIG
+            value: "1000000000"
+      - contains:
+          path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: FLOAT
+            value: "0.5"
+      - contains:
+          path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: ENABLED
+            value: "true"
+      - contains:
+          path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: QUOTED
+            value: "8"
+      - contains:
+          path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: FROM_FIELD
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+      - contains:
+          path: spec.roles[0].spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: ZERO
+            value: "0"
+      - contains:
+          path: spec.roles[0].spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: ONE
+            value: "1"
+      - contains:
+          path: spec.roles[0].spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: BIG
+            value: "1000000000"
+      - contains:
+          path: spec.roles[0].spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: FLOAT
+            value: "0.5"
+      - contains:
+          path: spec.roles[0].spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: ENABLED
+            value: "true"
+      - contains:
+          path: spec.roles[0].spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: QUOTED
+            value: "8"
+      - contains:
+          path: spec.roles[0].spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: FROM_FIELD
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+      - contains:
+          path: spec.roles[1].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: ZERO
+            value: "0"
+      - contains:
+          path: spec.roles[1].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: ONE
+            value: "1"
+      - contains:
+          path: spec.roles[1].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: BIG
+            value: "1000000000"
+      - contains:
+          path: spec.roles[1].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: FLOAT
+            value: "0.5"
+      - contains:
+          path: spec.roles[1].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: ENABLED
+            value: "true"
+      - contains:
+          path: spec.roles[1].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: QUOTED
+            value: "8"
+      - contains:
+          path: spec.roles[1].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: FROM_FIELD
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+      - contains:
+          path: spec.roles[1].spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: ZERO
+            value: "0"
+      - contains:
+          path: spec.roles[1].spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: ONE
+            value: "1"
+      - contains:
+          path: spec.roles[1].spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: BIG
+            value: "1000000000"
+      - contains:
+          path: spec.roles[1].spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: FLOAT
+            value: "0.5"
+      - contains:
+          path: spec.roles[1].spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: ENABLED
+            value: "true"
+      - contains:
+          path: spec.roles[1].spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: QUOTED
+            value: "8"
+      - contains:
+          path: spec.roles[1].spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: FROM_FIELD
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+
+  - it: pd disaggregated router
+    template: templates/pd-ds.yaml
+    set:
+      pd.colocate: false
+      pd.enabled: true
+      pd.prefill.gpus: 1
+      pd.decode.gpus: 1
+      rdma.enabled: true
+      scaler.enabled: false
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "router")].env
+          content:
+            name: ZERO
+            value: "0"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "router")].env
+          content:
+            name: ONE
+            value: "1"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "router")].env
+          content:
+            name: BIG
+            value: "1000000000"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "router")].env
+          content:
+            name: FLOAT
+            value: "0.5"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "router")].env
+          content:
+            name: ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "router")].env
+          content:
+            name: QUOTED
+            value: "8"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "router")].env
+          content:
+            name: FROM_FIELD
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+
+  - it: a negative number, a large exponent, a small fraction, false
+    template: templates/deployment.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      env:
+        - name: PLAIN_INT
+          value: 42
+        - name: NEGATIVE
+          value: -5
+        - name: HUGE
+          value: 1.0e+21
+        - name: SMALL
+          value: 0.0000015
+        - name: DISABLED
+          value: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: PLAIN_INT
+            value: "42"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: NEGATIVE
+            value: "-5"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: HUGE
+            value: "1000000000000000000000"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: SMALL
+            value: "0.0000015"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: DISABLED
+            value: "false"
+
+  - it: a null value is the empty string, and is dropped beside valueFrom
+    template: templates/deployment.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      env:
+        - name: NULL_VALUE
+          value: null
+        - name: NULL_BESIDE_FROM
+          value: null
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: NULL_VALUE
+            value: ""
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: NULL_BESIDE_FROM
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+
+  - it: a user value still replaces the chart's own entry in place
+    template: templates/pd-colocate.yaml
+    set:
+      pd.colocate: true
+      pd.enabled: true
+      pd.prefill.gpus: 1
+      pd.decode.gpus: 1
+      rdma.enabled: true
+      scaler.enabled: false
+      env:
+        - name: NVIDIA_DISABLE_REQUIRE
+          value: 1
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: NVIDIA_DISABLE_REQUIRE
+            value: "1"
+          count: 1
+
+  - it: refuses a map as an env value
+    template: templates/deployment.yaml
+    set:
+      env:
+        - name: NOT_A_SCALAR
+          value:
+            a: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: "vllm: an env value must be a string, number or bool, got map"

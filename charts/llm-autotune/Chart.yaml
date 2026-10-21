@@ -2,7 +2,7 @@ apiVersion: v2
 name: llm-autotune
 description: Automated tuning of LLM inference deployments — campaigns, a launch stack, and policy-as-code search
 type: application
-version: 0.3.0
+version: 0.3.1
 appVersion: "0.3.0"
 home: https://github.com/modelsphere/llm-autotune
 sources:

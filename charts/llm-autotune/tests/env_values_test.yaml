@@ -1,0 +1,217 @@
+# extraEnv values reach the Kubernetes API as strings, whatever YAML type
+# the values file gave them: EnvVar.value is a string and server-side apply
+# rejects a number or a bool ("expected string, got int").
+suite: extraEnv values render as strings
+release:
+  name: ci
+set:
+  jwtSecret: ci
+  extraEnv:
+    - name: ZERO
+      value: 0
+    - name: ONE
+      value: 1
+    - name: BIG
+      value: 1000000000
+    - name: FLOAT
+      value: 0.5
+    - name: ENABLED
+      value: true
+    - name: QUOTED
+      value: "8"
+    - name: FROM_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: autotune-llmbench
+          key: api-key
+tests:
+  - it: api
+    template: templates/api.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "api")].env
+          content:
+            name: ZERO
+            value: "0"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "api")].env
+          content:
+            name: ONE
+            value: "1"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "api")].env
+          content:
+            name: BIG
+            value: "1000000000"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "api")].env
+          content:
+            name: FLOAT
+            value: "0.5"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "api")].env
+          content:
+            name: ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "api")].env
+          content:
+            name: QUOTED
+            value: "8"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "api")].env
+          content:
+            name: FROM_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: autotune-llmbench
+                key: api-key
+
+  - it: worker
+    template: templates/worker.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "worker")].env
+          content:
+            name: ZERO
+            value: "0"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "worker")].env
+          content:
+            name: ONE
+            value: "1"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "worker")].env
+          content:
+            name: BIG
+            value: "1000000000"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "worker")].env
+          content:
+            name: FLOAT
+            value: "0.5"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "worker")].env
+          content:
+            name: ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "worker")].env
+          content:
+            name: QUOTED
+            value: "8"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "worker")].env
+          content:
+            name: FROM_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: autotune-llmbench
+                key: api-key
+
+  - it: migrate-job
+    template: templates/migrate-job.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "migrate")].env
+          content:
+            name: ZERO
+            value: "0"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "migrate")].env
+          content:
+            name: ONE
+            value: "1"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "migrate")].env
+          content:
+            name: BIG
+            value: "1000000000"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "migrate")].env
+          content:
+            name: FLOAT
+            value: "0.5"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "migrate")].env
+          content:
+            name: ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "migrate")].env
+          content:
+            name: QUOTED
+            value: "8"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "migrate")].env
+          content:
+            name: FROM_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: autotune-llmbench
+                key: api-key
+
+  - it: schema-job
+    template: templates/schema-job.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "schema")].env
+          content:
+            name: ZERO
+            value: "0"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "schema")].env
+          content:
+            name: ONE
+            value: "1"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "schema")].env
+          content:
+            name: BIG
+            value: "1000000000"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "schema")].env
+          content:
+            name: FLOAT
+            value: "0.5"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "schema")].env
+          content:
+            name: ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "schema")].env
+          content:
+            name: QUOTED
+            value: "8"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "schema")].env
+          content:
+            name: FROM_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: autotune-llmbench
+                key: api-key
+
+  - it: refuses a map as an env value
+    template: templates/worker.yaml
+    set:
+      extraEnv:
+        - name: NOT_A_SCALAR
+          value:
+            a: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: "llm-autotune: an env value must be a string, number or bool, got map"

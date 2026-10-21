@@ -81,6 +81,21 @@ jobs:
           done
           exit $rc
 
+      # helm-unittest suites, for the charts that have them (charts/<chart>/tests/,
+      # kept out of the packaged chart by .helmignore). Helm 4 refuses an
+      # unsigned plugin unless told to; Helm 3 has no such flag.
+      - name: helm unittest
+        run: |
+          verify=""
+          case "$(helm version --short)" in v4.*) verify="--verify=false" ;; esac
+          # shellcheck disable=SC2086
+          helm plugin install https://github.com/helm-unittest/helm-unittest --version v1.2.1 $verify
+          charts=()
+          for d in charts/*/; do
+            [ -d "$d/tests" ] && charts+=("${d%/}")
+          done
+          helm unittest "${charts[@]}"
+
   # A chart whose templates, defaults, schema or subcharts change must raise its
   # version: release.yml skips a version that is already released and still
   # succeeds, so an unbumped change would never be published.

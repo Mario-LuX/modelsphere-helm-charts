@@ -102,6 +102,43 @@
 {{- end -}}
 
 {{/*
+  Render one env `value` as the string the Kubernetes API requires. EnvVar.value
+  is a string, and server-side apply refuses anything else ("expected string,
+  got int") -- but a values file that says `value: 1`, `value: 0` or
+  `value: true` hands the chart a number or a bool, and toYaml would emit it
+  bare.
+
+  Helm reads values files through JSON, so every YAML number arrives here as a
+  float64, and printing one with %v turns 1000000000 into "1e+09". A whole
+  number is therefore printed with no exponent and no fraction; anything else
+  goes through toJson, which keeps a plain decimal (0.5 -> "0.5"). Integers
+  from --set, bools and strings print as themselves; null is "". A map or list
+  is not an env value and is refused rather than stringified.
+*/}}
+{{- define "vllm.envValueString" -}}
+{{- $v := . -}}
+{{- if kindIs "string" $v -}}
+{{- $v -}}
+{{- else if kindIs "invalid" $v -}}
+{{- else if kindIs "bool" $v -}}
+{{- ternary "true" "false" $v -}}
+{{- else if or (kindIs "float64" $v) (kindIs "float32" $v) -}}
+{{- $f := float64 $v -}}
+{{- if eq $f 0.0 -}}
+{{- "0" -}}
+{{- else if eq $f (floor $f) -}}
+{{- printf "%.0f" $f -}}
+{{- else -}}
+{{- toJson $f -}}
+{{- end -}}
+{{- else if regexMatch "^u?int" (kindOf $v) -}}
+{{- printf "%d" $v -}}
+{{- else -}}
+{{- fail (printf "vllm: an env value must be a string, number or bool, got %s %s" (kindOf $v) (toJson $v)) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
   Merge chart-supplied env entries with user env entries (Values.env), user-wins
   on duplicate name, emitting a deduplicated item list for the call site to
   plant under its own `env:` key.
@@ -138,7 +175,19 @@
 {{- range (.chart | default list) -}}
   {{- $out = mustAppend $out . -}}
 {{- end -}}
-{{- range $u := .user | default list -}}
+{{- range $raw := .user | default list -}}
+  {{- /* A copy, so the caller's entry is never modified, with its value as a
+       string; a valueFrom entry is left alone, except that a null value
+       beside it is dropped (the API refuses an entry carrying both). */}}
+  {{- $u := $raw -}}
+  {{- if and (kindIs "map" $raw) (hasKey $raw "value") -}}
+    {{- $u = deepCopy $raw -}}
+    {{- if and (kindIs "invalid" $u.value) (hasKey $u "valueFrom") -}}
+      {{- $_ := unset $u "value" -}}
+    {{- else -}}
+      {{- $_ := set $u "value" (include "vllm.envValueString" $u.value) -}}
+    {{- end -}}
+  {{- end -}}
   {{- $merged := false -}}
   {{- $next := list -}}
   {{- range $e := $out -}}
