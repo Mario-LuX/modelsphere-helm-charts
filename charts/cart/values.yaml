@@ -60,6 +60,10 @@ baseConfig: |
   proxy:
     add_routed_peer_header: true
     remote_media_url_policy: 400
+    # Largest request body CART will accept, in bytes (200 MiB). Its own default
+    # is 10 MiB, which rejects a multimodal request carrying inline image or
+    # video data -- a single base64-encoded clip passes that on its own.
+    max_body_size: 209715200
   health:
     endpoint: "/health"
     interval_secs: 10
@@ -96,9 +100,14 @@ service:
   type: ClusterIP
   port: 8071           # must match the port in baseConfig above
 
+# The memory limit is what the radix tree is allowed to grow into: it holds the
+# prompt prefixes of every request seen since the last daily cleanup, so it
+# tracks traffic rather than model size, and max_tree_size above caps the node
+# count, not the bytes. Keep it generous -- hitting the limit means the OOM
+# killer takes the leader, and the warm cache goes with it.
 resources:
   requests: { cpu: 200m, memory: 256Mi }
-  limits: { cpu: "4", memory: 16Gi }
+  limits: { cpu: "4", memory: 32Gi }
 
 podAnnotations: {}
 nodeSelector: {}

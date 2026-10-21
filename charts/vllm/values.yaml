@@ -947,7 +947,7 @@ cart:
   # baseConfig: |
   #   ...
   # resources:
-  #   limits: { cpu: "4", memory: 4Gi }
+  #   limits: { cpu: "4", memory: 32Gi }
   # Scheduling. CART is CPU-only, so it has no business occupying a GPU node --
   # pin it away if yours are tainted or scarce. affinity ADDS to the subchart's
   # HA anti-affinity (which keeps the two replicas off one node) instead of

@@ -5,7 +5,7 @@ home: https://github.com/modelsphere/helm-charts
 sources:
   - https://github.com/modelsphere/helm-charts
 type: application
-version: 0.9.20
+version: 0.9.21
 appVersion: "1.0.0"
 
 # CART is vendored under charts/cart -- already present, so no `helm dependency
@@ -21,7 +21,7 @@ appVersion: "1.0.0"
 # the version and re-run it; never edit charts/cart by hand.
 dependencies:
   - name: cart
-    version: 0.2.2
+    version: 0.2.3
     # The single copy in this repo, shared by both parent charts rather than
     # vendored into each of them.
     repository: "file://../cart"
