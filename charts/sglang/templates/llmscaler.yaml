@@ -19,12 +19,15 @@
   at the key to fix.
 */}}
 {{- $s := .Values.scaler }}
-{{- $provider := $s.metricProvider | default "Prometheus" }}
+{{- /* No default: values.yaml ships Custom, and a user who empties the key must
+       pick explicitly rather than slide into Prometheus. The enum check below
+       turns an unset value into a render-time error that names the key to fix. */}}
+{{- $provider := $s.metricProvider }}
 {{- $cp := $s.customProvider | default dict }}
 {{- $custom := eq $provider "Custom" }}
 
 {{- if not (has $provider (list "Prometheus" "Custom")) }}
-{{- fail (printf "sglang: scaler.metricProvider must be \"Prometheus\" or \"Custom\", got %q -- the CRD enum rejects anything else" $provider) }}
+{{- fail (printf "sglang: scaler.metricProvider must be \"Prometheus\" or \"Custom\", got %s -- the CRD enum rejects anything else" (ternary $provider "<unset>" (kindIs "string" $provider))) }}
 {{- end }}
 {{- if $custom }}
   {{- if .Values.metricsMock.enabled }}

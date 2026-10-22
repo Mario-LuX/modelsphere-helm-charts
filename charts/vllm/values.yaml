@@ -760,7 +760,7 @@ lifecycle:
 scaler:
   enabled: true
   minReplicas: 1
-  maxReplicas: 5
+  maxReplicas: 1000
   syncPeriodSeconds: 10
 
   # Where the scaling signal comes from. The two are alternatives, not layers,
@@ -768,9 +768,14 @@ scaler:
   #
   #   Prometheus  metrics below are PromQL, evaluated against serverAddress, and
   #               replicas come out of ceil(readyReplicas * value / target).
+  #               spec.maxReplicas IS the ceiling under this provider, and the
+  #               shipped default of 1000 is sized for Custom (where the
+  #               decision server enforces the real bound via the SLO) --
+  #               tighten it explicitly for a Prometheus install.
   #   Custom      metrics below are not read at all. serverAddress is a decision
   #               server, and the scaler reads a replica count straight off it.
-  #               Requires customProvider.serviceId.
+  #               Requires customProvider.serviceId. The decision server is the
+  #               real min/max authority; spec.maxReplicas is only a backstop.
   #
   # Which one is in play also decides what serverAddress means, what has to be
   # filled in below, and whether scaleDown.deletionCostQuery is consulted.
