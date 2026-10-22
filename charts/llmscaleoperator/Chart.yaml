@@ -5,8 +5,8 @@ description: |
   signals -- KV-cache utilization, queue depth, TPM/capacity load -- rather than
   CPU and memory. An HPA specialized for token serving.
 
-  Ships the LLMScaler CRD (autoscaling.modelsphere.dev/v1alpha1) and the controller that
-  reconciles it. The SLO storage side lives in the llm-slo-decision-gen chart; the
+  Ships the LLMScaler CRD (autoscaling.modelsphere.dev/v1alpha1), the LLMService CRD
+  (serving.modelsphere.dev/v1alpha1) and the controller that reconciles them. The SLO storage side lives in the llm-slo-decision-gen chart; the
   two are independent, and this one is what you need for autoscaling alone.
 
   Generated from the llm-operator repo (dist/chart, kubebuilder helm plugin) and
@@ -20,8 +20,8 @@ keywords:
   - vllm
   - sglang
 
-version: 0.3.0
+version: 0.5.0
 # appVersion names an image that EXISTS in the registry, which is not always the
 # newest version the llm-operator repo has declared: publishing a chart that
 # points at an unbuilt image hands out something that cannot be installed.
-appVersion: "0.4.0"
+appVersion: "0.5.0"

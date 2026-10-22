@@ -66,23 +66,6 @@ the RBAC that reads it cannot disagree.
 {{- end -}}
 {{- end -}}
 
-{{/*
-The custom resources a release page reports on, read-only. Granted whether or
-not deploy is on: reading what a ModelRoute or LLMScaler last observed changes
-nothing, and the page is how an operator finds out a model is not routed.
-*/}}
-{{- define "swiss.objectReadRules" -}}
-- apiGroups: ["autoscaling.4pd.io", "autoscaling.modelsphere.dev"]
-  resources: ["llmscalers"]
-  verbs: ["get"]
-- apiGroups: ["inference.x-k8s.io", "inference.modelsphere.dev"]
-  resources: ["llmslorequirements"]
-  verbs: ["get"]
-- apiGroups: ["routing.gpucluster.io", "routing.modelsphere.dev"]
-  resources: ["modelroutes"]
-  verbs: ["get"]
-{{- end -}}
-
 {{/* Exactly what the sglang and vllm charts render, plus helm's release storage. */}}
 {{- define "swiss.deployRules" -}}
 {{- $all := list "get" "list" "watch" "create" "update" "patch" "delete" }}
@@ -116,6 +99,9 @@ passes them on.
 - apiGroups: ["leaderworkerset.x-k8s.io"]
   resources: ["leaderworkersets"]
   verbs: {{ $all | toJson }}
+- apiGroups: ["disaggregatedset.x-k8s.io"]
+  resources: ["disaggregatedsets"]
+  verbs: {{ $all | toJson }}
 - apiGroups: ["autoscaling.4pd.io", "autoscaling.modelsphere.dev"]
   resources: ["llmscalers"]
   verbs: {{ $all | toJson }}
@@ -125,4 +111,31 @@ passes them on.
 - apiGroups: ["routing.gpucluster.io", "routing.modelsphere.dev"]
   resources: ["modelroutes"]
   verbs: {{ $all | toJson }}
+{{- end -}}
+
+{{/*
+LLMService access, granted whichever install method a release uses: the method
+is picked per install, so the grant cannot depend on it. controllerrevisions are
+read-only: they hold archived specs.
+*/}}
+{{- define "swiss.llmsvcRules" -}}
+- apiGroups: ["serving.modelsphere.dev"]
+  resources: ["llmservices"]
+  verbs: ["get","list","watch","create","update","patch","delete"]
+- apiGroups: ["apps"]
+  resources: ["controllerrevisions"]
+  verbs: {{ list "get" "list" | toJson }}
+{{- end -}}
+
+{{/*
+catalog-server, vendored: model-catalog's catalog-server/chart, its templates
+copied into templates/catalog-server/ as they are, each wrapped to render, when
+catalogServer.enabled, with this context in place of the swiss chart's: its
+values are catalogServer, its chart catalog-server's. One line differs: the
+config checksum includes the config, not the ConfigMap's template path.
+*/}}
+{{- define "swiss.catalogServer" -}}
+Values: {{- toYaml .Values.catalogServer | nindent 2 }}
+Release: {{- toYaml .Release | nindent 2 }}
+Chart: { Name: catalog-server, Version: 0.1.0, AppVersion: "0.1.0" }
 {{- end -}}

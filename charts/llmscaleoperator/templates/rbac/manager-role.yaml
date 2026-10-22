@@ -13,6 +13,29 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - configmaps
+  - secrets
+  - serviceaccounts
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  verbs:
+  - create
+  - get
+  - patch
+- apiGroups:
+  - ""
+  resources:
   - pods
   verbs:
   - get
@@ -22,7 +45,19 @@ rules:
 - apiGroups:
   - apps
   resources:
+  - controllerrevisions
   - deployments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
   - statefulsets
   verbs:
   - get
@@ -31,6 +66,7 @@ rules:
   - update
   - watch
 - apiGroups:
+  - autoscaling.4pd.io
   - autoscaling.modelsphere.dev
   resources:
   - llmscalers
@@ -57,12 +93,133 @@ rules:
   - patch
   - update
 - apiGroups:
-  - leaderworkerset.x-k8s.io
+  - coordination.k8s.io
   resources:
-  - leaderworkersets
+  - leases
   verbs:
+  - create
   - get
   - list
   - patch
   - update
   - watch
+- apiGroups:
+  - disaggregatedset.x-k8s.io
+  resources:
+  - disaggregatedsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - inference.modelsphere.dev
+  - inference.x-k8s.io
+  resources:
+  - llmslorequirements
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - leaderworkerset.x-k8s.io
+  resources:
+  - leaderworkersets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - monitoring.coreos.com
+  resources:
+  - servicemonitors
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  - roles
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - routing.gpucluster.io
+  - routing.modelsphere.dev
+  resources:
+  - modelroutes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - serving.modelsphere.dev
+  resources:
+  - llmservices
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - serving.modelsphere.dev
+  resources:
+  - llmservices/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - serving.modelsphere.dev
+  resources:
+  - llmservices/status
+  verbs:
+  - get
+  - patch
+  - update

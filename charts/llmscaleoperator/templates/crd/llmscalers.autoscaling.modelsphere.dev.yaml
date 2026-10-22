@@ -88,10 +88,12 @@ spec:
                 - serviceId
                 type: object
               maxReplicas:
-                description: maxReplicas is the upper limit for the number of replicas
-                  to which the autoscaler can scale up
+                description: |-
+                  maxReplicas is the upper limit for the number of replicas to which the
+                  autoscaler can scale up. 0 pins the fleet at zero replicas, which
+                  combined with minReplicas: 0 disables scaling entirely.
                 format: int32
-                minimum: 1
+                minimum: 0
                 type: integer
               metricProvider:
                 default: Prometheus
@@ -148,10 +150,15 @@ spec:
                   type: object
                 type: array
               minReplicas:
-                description: minReplicas is the lower limit for the number of replicas
-                  to which the autoscaler can scale down
+                description: |-
+                  minReplicas is the lower limit for the number of replicas to which the
+                  autoscaler can scale down. 0 enables scale-to-zero: an idle target is
+                  scaled all the way down, and wakes back up when a metric evaluates to a
+                  positive recommendation (under the Prometheus provider the ratio is then
+                  computed against a single-replica baseline, since a fleet of zero has no
+                  per-replica measurement to scale off).
                 format: int32
-                minimum: 1
+                minimum: 0
                 type: integer
               preemption:
                 description: preemption defines whether priority-based preemption

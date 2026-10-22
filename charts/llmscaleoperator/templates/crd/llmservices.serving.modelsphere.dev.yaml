@@ -1,0 +1,357 @@
+{{- if .Values.crd.enabled }}
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    {{- if .Values.crd.keep }}
+    "helm.sh/resource-policy": keep
+    {{- end }}
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: llmservices.serving.modelsphere.dev
+spec:
+  group: serving.modelsphere.dev
+  names:
+    kind: LLMService
+    listKind: LLMServiceList
+    plural: llmservices
+    shortNames:
+    - llmsvc
+    singular: llmservice
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Chart name
+      jsonPath: .spec.chart.name
+      name: Chart
+      type: string
+    - description: Resolved chart version
+      jsonPath: .status.chart.version
+      name: Version
+      type: string
+    - description: Model name
+      jsonPath: .spec.model.name
+      name: Model
+      type: string
+    - description: Reconciliation phase
+      jsonPath: .status.phase
+      name: Phase
+      type: string
+    - description: Helm release revision
+      jsonPath: .status.helm.revision
+      name: Revision
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          LLMService is the Schema for the llmservices API. One LLMService maps to one
+          helm release in the same namespace; metadata.name is the release name.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of LLMService
+            properties:
+              chart:
+                description: chart selects the helm chart for this release.
+                properties:
+                  credentialsRef:
+                    description: |-
+                      credentialsRef optionally names a Secret in this namespace used to pull
+                      the chart and to list its versions. The Secret data must contain the
+                      keys username and password. When unset, the pull and the listing are anonymous.
+                    properties:
+                      name:
+                        description: name of the Secret.
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  name:
+                    description: name is the chart name.
+                    minLength: 1
+                    type: string
+                  repo:
+                    description: repo is the chart repository URL. It must start with
+                      https:// or oci://.
+                    minLength: 1
+                    pattern: ^(https://|oci://).+
+                    type: string
+                  version:
+                    description: |-
+                      version is an exact chart version or a semver range. The operator
+                      resolves it on first apply and pins the result on status.chart. While
+                      the pinned version still satisfies the range it is kept, through other
+                      spec changes and newer charts in the repository alike; a new
+                      serving.modelsphere.dev/re-resolve value moves it to the newest in range.
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                - repo
+                - version
+                type: object
+              layers:
+                description: |-
+                  layers are helm values documents merged in order, last writer wins.
+                  Names are unique so each layer can be owned separately under
+                  server-side apply. Order is the meaning of the list, so one writer
+                  should own the whole list. An empty list is valid and leaves the
+                  chart defaults in place.
+                items:
+                  description: Layer is one values document. Layers merge in list
+                    order, last writer wins.
+                  properties:
+                    name:
+                      description: name identifies this layer. Names must be unique
+                        within spec.layers.
+                      minLength: 1
+                      type: string
+                    values:
+                      description: values is a schemaless object of helm values contributed
+                        by this layer.
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                  required:
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              model:
+                description: |-
+                  model is descriptive metadata for the served model. It is not used to
+                  render the chart.
+                properties:
+                  engine:
+                    description: engine is the inference engine, such as sglang or
+                      vllm.
+                    type: string
+                  hf:
+                    description: hf is the Hugging Face repository id.
+                    type: string
+                  name:
+                    description: name of the model.
+                    type: string
+                  variant:
+                    description: variant is the serving variant, such as a parallelism
+                      and hardware profile.
+                    type: string
+                  version:
+                    description: version of the model.
+                    type: string
+                type: object
+              suspend:
+                description: suspend stops reconciliation. The status keeps the last
+                  outcome.
+                type: boolean
+            required:
+            - chart
+            type: object
+          status:
+            description: status defines the observed state of LLMService
+            properties:
+              appliedHash:
+                description: appliedHash is a digest over status.chart and the merged
+                  layers.
+                type: string
+              chart:
+                description: |-
+                  chart is the chart name and the exact version spec.chart.version
+                  resolved to.
+                properties:
+                  name:
+                    description: name is the chart name that was resolved.
+                    type: string
+                  reResolve:
+                    description: |-
+                      reResolve is the serving.modelsphere.dev/re-resolve value already
+                      honored. Only a different non-empty value re-resolves.
+                    type: string
+                  version:
+                    description: version is the exact chart version resolved from
+                      spec.chart.version.
+                    type: string
+                type: object
+              conditions:
+                description: |-
+                  conditions represent the current state of the LLMService.
+                  Types used by the operator are Applied and Adopted.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              helm:
+                description: helm is the release revision and status last observed.
+                properties:
+                  revision:
+                    description: revision is the helm release revision.
+                    type: integer
+                  status:
+                    description: status is the helm release status, such as deployed.
+                    type: string
+                type: object
+              history:
+                description: |-
+                  history records applies, newest first. The controller keeps the most
+                  recent DefaultHistoryLimit (10) entries.
+                items:
+                  description: HistoryEntry records one applied revision. status.history
+                    is newest first.
+                  properties:
+                    action:
+                      description: |-
+                        action is the swiss action copied for this revision (install, upgrade,
+                        rollback, or migrate), when one was set.
+                      type: string
+                    annotations:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        annotations are the swiss.modelsphere.dev/* annotations copied from the
+                        LLMService when this revision was recorded.
+                      type: object
+                    appliedAt:
+                      description: appliedAt is when this revision was recorded.
+                      format: date-time
+                      type: string
+                    controllerRevision:
+                      description: |-
+                        controllerRevision is the name of the ControllerRevision that stores
+                        the spec snapshot for this revision.
+                      type: string
+                    forceConflicts:
+                      description: |-
+                        forceConflicts records that this apply honored
+                        serving.modelsphere.dev/force-conflicts for its generation.
+                      type: boolean
+                    hash:
+                      description: hash is the appliedHash at this revision.
+                      type: string
+                    reResolved:
+                      description: |-
+                        reResolved records that this apply honored a new
+                        serving.modelsphere.dev/re-resolve value rather than the pinned version.
+                      type: boolean
+                    revision:
+                      description: revision is the helm release revision this entry
+                        records.
+                      type: integer
+                  required:
+                  - appliedAt
+                  - controllerRevision
+                  - hash
+                  - revision
+                  type: object
+                type: array
+              message:
+                description: message is the helm error when phase is Failed, and empty
+                  otherwise.
+                type: string
+              observedGeneration:
+                description: |-
+                  observedGeneration is the metadata.generation last reconciled to a
+                  terminal outcome.
+                format: int64
+                type: integer
+              phase:
+                description: |-
+                  phase is the current reconciliation phase: Pending, Applying, Applied,
+                  or Failed.
+                enum:
+                - Pending
+                - Applying
+                - Applied
+                - Failed
+                type: string
+              releaseUID:
+                description: |-
+                  releaseUID is the UID of the LLMService that claimed this helm release.
+                  The controller writes it before install, and again on adopt and on every
+                  successful apply. Ownership is this value equal to metadata.uid, or the
+                  release label serving.modelsphere.dev/llmservice-uid equal to that uid.
+                  A later condition change does not drop the claim.
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+{{- end }}
