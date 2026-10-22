@@ -227,23 +227,19 @@ spec:
           # ones.
           PF_HL={{ $fullname }}-prefill-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
           DC_HL={{ $fullname }}-decode-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
+          # One loop wraps resolve + identity probe + argv build: an IP that
+          # hard-refuses its sidecar probe (terminating pod still advertised
+          # by the headless service) is dropped from argv, and if that empties
+          # a role we fall back here to re-resolve, not exit. Liveness probe
+          # handles drift after exec; this loop only cares about boot.
           for i in $(seq 1 60); do
             PF_IPS=$(getent hosts "$PF_HL" | awk '{print $1}' | sort -u)
             DC_IPS=$(getent hosts "$DC_HL" | awk '{print $1}' | sort -u)
-            [ -n "$PF_IPS" ] && [ -n "$DC_IPS" ] && break
-            echo "router: slice {{ $s }} upstreams not yet resolving (prefill: '${PF_IPS:-none}', decode: '${DC_IPS:-none}'; attempt $i)"
-            sleep 5
-          done
-          if [ -z "$PF_IPS" ] || [ -z "$DC_IPS" ]; then
-            echo "router: timed out waiting for slice {{ $s }} upstreams to resolve: prefill '${PF_IPS:-none}', decode '${DC_IPS:-none}'" >&2
-            exit 1
-          fi
-          PF_ARGS=""
-          for ip in $PF_IPS; do PF_ARGS="$PF_ARGS --prefill http://$ip:{{ $pd.prefill.httpPort | default 30001 }} {{ $pd.prefill.bootstrapPort | default 8998 }}"; done
-          DC_ARGS=""
-          for ip in $DC_IPS; do DC_ARGS="$DC_ARGS --decode http://$ip:{{ $pd.decode.httpPort | default 30002 }}"; done
-          echo "router: prefill$PF_ARGS"
-          echo "router: decode $DC_ARGS"
+            if [ -z "$PF_IPS" ] || [ -z "$DC_IPS" ]; then
+              echo "router: slice {{ $s }} upstreams not yet resolving (prefill: '${PF_IPS:-none}', decode: '${DC_IPS:-none}'; attempt $i/60)" >&2
+              sleep 5
+              continue
+            fi
           # Persist the boot-time upstream set for the liveness drift probe.
           # Router argv is immutable for the life of the process, so the file
           # is the probe's only handle on "what upstreams were baked in".
@@ -268,21 +264,49 @@ spec:
           # slop (timeout) also retry on the same budget.
           HW_PORT={{ ternary (int $root.Values.hangWatcher.port) 0 $root.Values.hangWatcher.enabled }}
           probe_identity() {
-            local ip=$1 budget=${2:-5400} waited=0
-            # The function returns the tuple on stdout; all breadcrumb logs
-            # go to stderr so they land in the container log instead of
-            # polluting the captured return value.
+            # usage: probe_identity <ip> <role-hl-fqdn> [budget]
+            #
+            # Waits for the sidecar /engine on $ip to return a stable identity
+            # tuple. Re-resolves the role's headless name on every iteration:
+            # if the IP has fallen out of DNS, the pod's deletionTimestamp has
+            # finalized and the kubelet has torn it down -- that IP is gone
+            # for good, so the function exits 3 and the caller drops it from
+            # argv + the snapshot. While the IP is still in DNS, every probe
+            # failure (503, conn refused, timeout, bad json) is treated as
+            # warmup and retried on the 90min budget below. Dropping on RST
+            # alone would false-positive on pods whose sandbox exists but
+            # whose containers are still pulling the engine image.
+            #
+            # stdout carries the identity tuple on success; exit 3 = IP gone
+            # from DNS, caller must exclude it; exit 0 covers every "we're
+            # done" outcome, including the sentinel fallbacks.
+            local ip=$1 fqdn=$2 budget=${3:-5400} cap_silent=600 waited=0 waited_silent=0
             [ "$HW_PORT" -eq 0 ] && {
               echo "router: $ip identity sentinel (hangWatcher disabled at render)" >&2
               echo '|'; return 0
             }
             while :; do
+              # Re-resolve without short-circuiting on resolver failure: a
+              # DNS blip returns nothing and would look like "pod is gone"
+              # if we trusted the pipeline's exit alone. Compare the resolved
+              # list as text -- a genuine drop is "ip not in the list AND the
+              # list itself is non-empty or empty-by-design".
+              local resolved_now
+              resolved_now=$(getent hosts "$fqdn" 2>/dev/null | awk '{print $1}' | sort -u)
+              if [ -n "$resolved_now" ] && ! printf '%s\n' "$resolved_now" | grep -qxF "$ip"; then
+                echo "router: $ip no longer advertised by $fqdn (now: $resolved_now);" \
+                     "treating as terminating pod, dropping from argv" >&2
+                return 3
+              fi
               local out
               # python3 heredoc: body and terminator sit at the block scalar's
               # own indent, so the rendered yaml strips them to column 0 for
               # bash+python. Exit 0 prints '<restarts>|<ts>' on 200 or '|' on
-              # 404 sentinel; exit 2 on 503 / conn refused / timeout / bad
-              # json = transient, caller retries on its own budget.
+              # 404 sentinel; exit 5 on 503 (sidecar alive, engine still
+              # pinning); exit 2 on everything else transient (RST / timeout /
+              # bad json). The 503 split matters for the silent-time cap
+              # below -- it tells bash "the pod reported something this tick,
+              # so the silence window restarts" without aborting the probe.
               out=$(python3 - "$ip" "$HW_PORT" <<'PY' 2>/dev/null
           import json, sys, urllib.request, urllib.error
           ip, port = sys.argv[1], sys.argv[2]
@@ -293,6 +317,8 @@ spec:
           except urllib.error.HTTPError as e:
               if e.code == 404:
                   print('|')
+              elif e.code == 503:
+                  sys.exit(5)
               else:
                   sys.exit(2)
           except Exception:
@@ -300,6 +326,7 @@ spec:
           PY
           )
               local rrc=$?
+              [ $rrc -eq 5 ] && waited_silent=0
               if [ $rrc -eq 0 ]; then
                 if [ "$out" = '|' ]; then
                   echo "router: $ip identity sentinel (sidecar has no /engine)" >&2
@@ -312,22 +339,59 @@ spec:
                 echo "router: $ip identity probe gave no usable answer after ${budget}s; recording ip||" >&2
                 echo '|'; return 0
               fi
-              sleep 10; waited=$((waited+10))
+              # Cap how long we keep retrying a pod that stays in DNS but
+              # never responds -- a stuck-Terminating pod (node loss, kubelet
+              # never ACKs the delete) keeps resolving forever, so the DNS
+              # membership check can't rescue it. 503s reset this clock because
+              # they mean the pod reported something this tick; only true
+              # silence (RST / timeout / bad json) accumulates toward the cap.
+              # A false-positive drop self-heals: the drift liveness probe
+              # sees the new IP once the pod starts serving /health and
+              # restarts the router container to re-bake argv.
+              if [ $waited_silent -ge $cap_silent ]; then
+                echo "router: $ip silent for ${cap_silent}s;" \
+                     "treating as stuck-Terminating, dropping from argv" >&2
+                return 3
+              fi
+              sleep 10; waited=$((waited+10)); waited_silent=$((waited_silent+10))
             done
           }
+          echo "router: slice {{ $s }} resolved prefill: ${PF_IPS:-none}" >&2
+          echo "router: slice {{ $s }} resolved decode:  ${DC_IPS:-none}" >&2
           install -d -m 0755 /run/pd-router
           write_role_snapshot() {
-            local role=$1 ips=$2
+            # usage: write_role_snapshot <role> <hl-fqdn> <ips>
+            #
+            # Writes /run/pd-router/<role>-ips and echoes the kept IPs on
+            # stdout so the caller can capture the filtered list for argv.
+            # IPs whose probe_identity returns 3 (no longer in DNS) are
+            # excluded from both.
+            local role=$1 fqdn=$2 ips=$3
             local T=$(mktemp -p /run/pd-router)
-            local ip id
+            local ip id kept=""
             for ip in $ips; do
-              id=$(probe_identity "$ip")
-              printf '%s|%s\n' "$ip" "$id" >>"$T"
+              if id=$(probe_identity "$ip" "$fqdn"); then
+                printf '%s|%s\n' "$ip" "$id" >>"$T"
+                kept="$kept $ip"
+              fi
             done
             mv "$T" "/run/pd-router/${role}-ips"
+            echo "${kept# }"
           }
-          write_role_snapshot prefill "$PF_IPS"
-          write_role_snapshot decode  "$DC_IPS"
+          PF_KEPT=$(write_role_snapshot prefill "$PF_HL" "$PF_IPS")
+          DC_KEPT=$(write_role_snapshot decode  "$DC_HL" "$DC_IPS")
+          if [ -z "$PF_KEPT" ] || [ -z "$DC_KEPT" ]; then
+            echo "router: slice {{ $s }} after dead-ip filter: prefill='${PF_KEPT:-none}', decode='${DC_KEPT:-none}';" \
+                 "returning to DNS resolve (attempt $i/60)" >&2
+            sleep 5
+            continue
+          fi
+          PF_ARGS=""
+          for ip in $PF_KEPT; do PF_ARGS="$PF_ARGS --prefill http://$ip:{{ $pd.prefill.httpPort | default 30001 }} {{ $pd.prefill.bootstrapPort | default 8998 }}"; done
+          DC_ARGS=""
+          for ip in $DC_KEPT; do DC_ARGS="$DC_ARGS --decode http://$ip:{{ $pd.decode.httpPort | default 30002 }}"; done
+          echo "router: prefill$PF_ARGS"
+          echo "router: decode $DC_ARGS"
           echo "router: boot script done, exec into router" >&2
           # shellcheck disable=SC2086
           exec python3 -m sglang_router.launch_router \
@@ -337,6 +401,9 @@ spec:
             --model-path {{ $root.Values.model.mountPath }} \
             --host 0.0.0.0 \
             --port {{ $root.Values.service.port }}
+          done
+          echo "router: exhausted 60 resolve+filter cycles without a usable upstream set" >&2
+          exit 1
         {{- /* The router's only read of "am I useful" is answering "is at
                least one engine of each role taking HTTP behind me". exec to
                avoid depending on the router's own /health (which cannot see
