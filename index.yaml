@@ -121,6 +121,26 @@ entries:
     version: 0.1.13
   bodylog-exporter:
   - apiVersion: v2
+    appVersion: 0.2.11
+    created: "2026-10-23T08:17:57.213727024Z"
+    description: Turns the body-log listener's detail records into Prometheus metrics,
+      and polls the router's control-plane endpoints for live routing state
+    digest: d953c83f421100583278fcb96e1e904d766db271c210c9a62a824cfe32a22b6e
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - bodylog
+    - exporter
+    - prometheus
+    - observability
+    name: bodylog-exporter
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/modelsphere/llm-openresty
+    type: application
+    urls:
+    - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/bodylog-exporter-0.3.4/bodylog-exporter-0.3.4.tgz
+    version: 0.3.4
+  - apiVersion: v2
     appVersion: 0.2.8
     created: "2026-10-06T02:14:10.245367549Z"
     description: Turns the body-log listener's detail records into Prometheus metrics,
@@ -220,7 +240,54 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/bodylog-exporter-0.2.6/bodylog-exporter-0.2.6.tgz
     version: 0.2.6
+  bodylog-victorialogs:
+  - apiVersion: v2
+    appVersion: v1.53.0
+    created: "2026-10-23T08:17:57.512705413Z"
+    dependencies:
+    - alias: victorialogs
+      condition: victorialogs.enabled
+      name: victoria-logs-single
+      repository: oci://ghcr.io/victoriametrics/helm-charts
+      version: 0.13.10
+    description: 'Searchable body logs: Vector ships bodylog''s JSONL into VictoriaLogs,
+      registered as a Grafana datasource'
+    digest: 0f9b091823dc034aaf5572c1ede800146a0f3e525728ec9b15fa8c906e536272
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - bodylog
+    - victorialogs
+    - vector
+    - logs
+    name: bodylog-victorialogs
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/VictoriaMetrics/VictoriaLogs
+    - https://github.com/vectordotdev/vector
+    type: application
+    urls:
+    - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/bodylog-victorialogs-0.1.1/bodylog-victorialogs-0.1.1.tgz
+    version: 0.1.1
   cart:
+  - apiVersion: v2
+    appVersion: v0.6.4
+    created: "2026-10-23T08:17:57.689686291Z"
+    description: 'Cache-aware router: routes each request to the replica that already
+      holds the longest matching prompt prefix, while keeping load balanced'
+    digest: 04bf1d0df4eb505ddc4ed4715a719e4cec80fa49200e610c7df30bb5fd19718e
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - cache-aware-router
+    - routing
+    - autoconfig
+    name: cart
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/modelsphere/cache_aware_router
+    type: application
+    urls:
+    - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/cart-0.2.3/cart-0.2.3.tgz
+    version: 0.2.3
   - apiVersion: v2
     appVersion: v0.6.4
     created: "2026-09-21T04:11:59.224197899Z"
@@ -301,6 +368,30 @@ entries:
     version: 0.1.0
   console:
   - apiVersion: v2
+    appVersion: 0.2.1
+    created: "2026-10-23T08:17:57.91013898Z"
+    dependencies:
+    - condition: swiss.enabled
+      name: swiss
+      repository: oci://ghcr.io/modelsphere/charts
+      version: 0.6.3
+    description: ModelSphere community portal — identity (users, roles, login) and
+      a federation gateway to Swiss and other backends.
+    digest: fbaf375adee5cb3a41ebb5d0a71beaa18a2faec7d05f3c87d15496f63fbcf76d
+    home: https://github.com/modelsphere/console
+    keywords:
+    - console
+    - llm
+    - inference
+    - portal
+    name: console
+    sources:
+    - https://github.com/modelsphere/console
+    type: application
+    urls:
+    - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/console-0.2.1/console-0.2.1.tgz
+    version: 0.2.1
+  - apiVersion: v2
     appVersion: 0.1.2
     created: "2026-10-14T07:09:50.596328403Z"
     dependencies:
@@ -326,6 +417,26 @@ entries:
     version: 0.1.2
   continuation-gateway:
   - apiVersion: v2
+    appVersion: 0.2.3
+    created: "2026-10-23T08:17:58.090633629Z"
+    description: 'Continuation gateway: when a streaming completion stalls or drops
+      mid-generation, resumes it once from what the client already received, so the
+      client sees one continuous, complete stream'
+    digest: a19d5ab019975322b53669e202556b107d005ae5ca0c216073885130daac3674
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - continuation-gateway
+    - streaming
+    - resume
+    name: continuation-gateway
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/modelsphere/continuation_gateway
+    type: application
+    urls:
+    - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/continuation-gateway-0.1.2/continuation-gateway-0.1.2.tgz
+    version: 0.1.2
+  - apiVersion: v2
     appVersion: 0.2.2
     created: "2026-10-08T08:46:46.137137197Z"
     description: 'Continuation gateway: when a streaming completion stalls or drops
@@ -345,6 +456,50 @@ entries:
     urls:
     - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/continuation-gateway-0.1.1/continuation-gateway-0.1.1.tgz
     version: 0.1.1
+  llm-autotune:
+  - apiVersion: v2
+    appVersion: 0.3.0
+    created: "2026-10-23T08:17:58.337209853Z"
+    description: Automated tuning of LLM inference deployments — campaigns, a launch
+      stack, and policy-as-code search
+    digest: 9328cae47a6b4427eb3cd4b424b057e5e1891fd5e420df22af589e3a91fad9a7
+    home: https://github.com/modelsphere/llm-autotune
+    keywords:
+    - llm
+    - inference
+    - sglang
+    - vllm
+    - benchmarking
+    - autotuning
+    - kubernetes
+    name: llm-autotune
+    sources:
+    - https://github.com/modelsphere/llm-autotune
+    type: application
+    urls:
+    - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/llm-autotune-0.3.1/llm-autotune-0.3.1.tgz
+    version: 0.3.1
+  llm-bench:
+  - apiVersion: v2
+    appVersion: 0.3.0
+    created: "2026-10-23T08:17:58.64425373Z"
+    description: LLM Benchmark Platform - FastAPI backend, Vue frontend, Dramatiq
+      workers
+    digest: f7c8acc5b38d72e366e0b597f55b6c4eed9a5fec549e075c9bba911145be6569
+    home: https://github.com/modelsphere/llm-bench
+    keywords:
+    - llm
+    - inference
+    - benchmarking
+    - replay
+    - kubernetes
+    name: llm-bench
+    sources:
+    - https://github.com/modelsphere/llm-bench
+    type: application
+    urls:
+    - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/llm-bench-0.3.0/llm-bench-0.3.0.tgz
+    version: 0.3.0
   llm-slo-decision-gen:
   - apiVersion: v2
     appVersion: 0.7.0
@@ -493,6 +648,29 @@ entries:
     - https://github.com/modelsphere/helm-charts/releases/download/llm-slo-decision-gen-0.1.1/llm-slo-decision-gen-0.1.1.tgz
     version: 0.1.1
   llmscaleoperator:
+  - apiVersion: v2
+    appVersion: 0.5.0
+    created: "2026-10-23T08:17:58.818557748Z"
+    description: 'Kubernetes operator that autoscales LLM inference workloads on LLM-specific
+      signals -- KV-cache utilization, queue depth, TPM/capacity load -- rather than
+      CPU and memory. An HPA specialized for token serving.  Ships the LLMScaler CRD
+      (autoscaling.modelsphere.dev/v1alpha1), the LLMService CRD (serving.modelsphere.dev/v1alpha1)
+      and the controller that reconciles them. The SLO storage side lives in the llm-slo-decision-gen
+      chart; the two are independent, and this one is what you need for autoscaling
+      alone.  Generated from the llm-operator repo (dist/chart, kubebuilder helm plugin)
+      and maintained here, because this is where charts are published from. '
+    digest: 16689c8f006df6ec69097246dcde724ebfc68d217a7575301d3bbe8e0975312d
+    keywords:
+    - llm
+    - autoscaling
+    - operator
+    - vllm
+    - sglang
+    name: llmscaleoperator
+    type: application
+    urls:
+    - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/llmscaleoperator-0.5.0/llmscaleoperator-0.5.0.tgz
+    version: 0.5.0
   - apiVersion: v2
     appVersion: 0.4.0
     created: "2026-09-25T03:28:19.797287864Z"
@@ -650,6 +828,31 @@ entries:
     - https://github.com/modelsphere/helm-charts/releases/download/rdma-injector-0.2.0/rdma-injector-0.2.0.tgz
     version: 0.2.0
   sglang:
+  - apiVersion: v2
+    appVersion: 1.0.0
+    created: "2026-10-23T08:17:59.09364349Z"
+    dependencies:
+    - condition: cart.enabled
+      name: cart
+      repository: file://../cart
+      version: 0.2.3
+    - alias: continuationGateway
+      condition: continuationGateway.enabled
+      name: continuation-gateway
+      repository: file://../continuation-gateway
+      version: 0.1.2
+    description: SGLang inference deployment -- single-node, multi-node (LeaderWorkerSet)
+      or prefill/decode-disaggregated (DisaggregatedSet or merged colocate pod), with
+      optional cache-aware routing, autoscaling and hang detection
+    digest: fe504671e22f8643e5d5401b00a430dc9cbd45b53e487de0b8d5e0725f6e8fcd
+    home: https://github.com/modelsphere/helm-charts
+    name: sglang
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    type: application
+    urls:
+    - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/sglang-0.9.25/sglang-0.9.25.tgz
+    version: 0.9.25
   - apiVersion: v2
     appVersion: 1.0.0
     created: "2026-10-14T07:09:51.040515898Z"
@@ -986,6 +1189,19 @@ entries:
     version: 0.7.0
   swiss:
   - apiVersion: v2
+    appVersion: 0.7.0
+    created: "2026-10-23T08:17:59.401924395Z"
+    description: 'swissd -- the Swiss deploy control plane for the sglang and vllm
+      charts. One instance per cluster, running inside the cluster it manages: it
+      reads the model catalog over HTTP, reads this cluster''s releases and nodes
+      through its own ServiceAccount, and serves the web UI embedded in its binary.'
+    digest: 2f047bbc0bc851fdacc853730c1854de7e5e1f31b38afd79e0cb47cef1de1880
+    name: swiss
+    type: application
+    urls:
+    - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/swiss-0.7.0/swiss-0.7.0.tgz
+    version: 0.7.0
+  - apiVersion: v2
     appVersion: 0.6.3
     created: "2026-10-14T07:09:51.294568228Z"
     description: 'swissd -- the Swiss deploy control plane for the sglang and vllm
@@ -999,6 +1215,30 @@ entries:
     - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/swiss-0.6.3/swiss-0.6.3.tgz
     version: 0.6.3
   vllm:
+  - apiVersion: v2
+    appVersion: 1.0.0
+    created: "2026-10-23T08:17:59.680600656Z"
+    dependencies:
+    - condition: cart.enabled
+      name: cart
+      repository: file://../cart
+      version: 0.2.3
+    - alias: continuationGateway
+      condition: continuationGateway.enabled
+      name: continuation-gateway
+      repository: file://../continuation-gateway
+      version: 0.1.2
+    description: vLLM inference deployment -- single-node or multi-node (LeaderWorkerSet),
+      with optional cache-aware routing, autoscaling and hang detection
+    digest: af7fae40446cb37af03fb876e857fdd681827e1174698a1698a2628074e9966f
+    home: https://github.com/modelsphere/helm-charts
+    name: vllm
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    type: application
+    urls:
+    - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/vllm-0.8.21/vllm-0.8.21.tgz
+    version: 0.8.21
   - apiVersion: v2
     appVersion: 1.0.0
     created: "2026-10-14T07:09:51.56108236Z"
@@ -1303,4 +1543,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-10-14T07:09:51.561688883Z"
+generated: "2026-10-23T08:17:59.681083484Z"
