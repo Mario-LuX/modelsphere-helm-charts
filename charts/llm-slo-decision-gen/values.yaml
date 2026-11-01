@@ -17,7 +17,10 @@ decisionGen:
     repository: 4pdosc/llm-scaler-decision-gen
     ## 0.7.0 is the first release that reads LLMSLORequirement from
     ## inference.modelsphere.dev; earlier tags read the old group.
-    tag: "0.7.0"
+    ## 0.8.0 adds DisaggregatedSet placements and pdengine-typed bounds
+    ## (inert until bodylog exports per-role replicas_ready), and drops a
+    ## service from /decisions when its CR loses maximumDeployment.
+    tag: "0.8.0"
     pullPolicy: IfNotPresent
   service:
     port: 80

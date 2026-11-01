@@ -63,5 +63,5 @@ Upgrading from chart `<0.3.0` replaces the old bare `decision-gen` /
 
 | Component | Default image |
 |---|---|
-| decision-gen | `4pdosc/llm-scaler-decision-gen:0.7.0` (matches `appVersion`) |
+| decision-gen | `4pdosc/llm-scaler-decision-gen:0.8.0` (matches `appVersion`) |
 | slo-api | `4pdosc/llm-slo-api:v0.1` (incompatible with current CRDs — do not enable) |
