@@ -32,6 +32,16 @@ the release does **not** delete the CRDs or existing CRs. That is intentional
 so SLO objects survive chart churn. Do not ship a second chart that also
 defines these CRDs into the same cluster.
 
+### Upgrading the CRDs
+
+Helm installs `crds/` on first install only; `helm upgrade` never touches
+them. When a chart release changes a CRD, apply it yourself before (or right
+after) upgrading:
+
+```bash
+kubectl apply --server-side -f charts/llm-slo-decision-gen/crds/
+```
+
 ## Unstable variant
 
 `decisionGen.unstable` mirrors the source repo's

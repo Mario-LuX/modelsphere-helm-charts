@@ -19,11 +19,14 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
+    - jsonPath: .spec.minimumDeployment.type
+      name: Bounds_Type
+      type: string
     - jsonPath: .spec.minimumDeployment.value
-      name: Min_Replicas
+      name: Min
       type: integer
     - jsonPath: .spec.maximumDeployment.value
-      name: Max_Replicas
+      name: Max
       type: integer
     - jsonPath: .spec.priority
       name: Priority
@@ -40,12 +43,18 @@ spec:
                     default: replica
                     enum:
                     - replica
+                    - pdengine
                     type: string
                   value:
                     description: >-
-                      Highest replica count the decision service may
-                      recommend. 0 (with minimumDeployment.value also 0)
+                      Highest bound, in units of type, the decision service
+                      may recommend. 0 (with minimumDeployment.value also 0)
                       turns the service off.
+                      With type pdengine the bound is in engines instead of
+                      replicas: engines = n * (x + y), the total prefill plus
+                      decode engine placements across the PD service's n
+                      slices of xPyD shape. Routers do not count; a multi-pod
+                      engine group counts once.
                     minimum: 0
                     type: integer
                 type: object
@@ -58,13 +67,21 @@ spec:
                     default: replica
                     enum:
                     - replica
-                    - concurrency
+                    - pdengine
                     type: string
                   value:
                     description: >-
-                      Lowest replica count the decision service may recommend.
-                      0 enables scale-to-zero: an idle service is scaled all the
+                      Lowest bound, in units of type, the decision service may
+                      recommend. 0 enables scale-to-zero: an idle service is scaled all the
                       way down.
+                      With type pdengine the bound is in engines instead of
+                      replicas: engines = n * (x + y), the total prefill plus
+                      decode engine placements across the PD service's n
+                      slices of xPyD shape. Routers do not count; a multi-pod
+                      engine group counts once. 1 is unsatisfiable for
+                      pdengine; use 0 or at least 2. The whole block defaults
+                      to type replica, so a pdengine CR must set it
+                      explicitly.
                     default: 1
                     minimum: 0
                     type: integer
@@ -229,6 +246,12 @@ spec:
               message: minimumDeployment.value must be less than or equal to maximumDeployment.value
             - rule: "!has(self.maximumDeployment) || self.minimumDeployment.value != 0 || self.maximumDeployment.value == 0"
               message: maximumDeployment.value must be 0 when minimumDeployment.value is 0 (scale-to-zero is only for temporarily suspending the service)
+            - rule: "!has(self.maximumDeployment) || self.maximumDeployment.type != 'pdengine' || self.maximumDeployment.value != 1"
+              message: maximumDeployment.value 1 is unsatisfiable for type pdengine (a PD service needs at least 1 prefill and 1 decode engine); use 0 to disable the service
+            - rule: "self.minimumDeployment.type != 'pdengine' || self.minimumDeployment.value != 1"
+              message: minimumDeployment.value 1 is unsatisfiable for type pdengine (a PD service needs at least 1 prefill and 1 decode engine); use 0 or at least 2
+            - rule: "!has(self.maximumDeployment) || self.minimumDeployment.type == self.maximumDeployment.type"
+              message: minimumDeployment.type and maximumDeployment.type must match (bounds in mixed units are ambiguous); minimumDeployment defaults to type replica, so set it explicitly when maximumDeployment.type is pdengine
         type: object
     served: true
     storage: true
