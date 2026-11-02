@@ -1,0 +1,12 @@
+apiVersion: v2
+name: mooncake-master
+description: "Highly available Mooncake Store masters: two or more mooncake_master replicas electing a leader through etcd (bundled or external), with an optional sidecar that re-registers NVMe-oF volumes on whichever master wins"
+home: https://github.com/modelsphere/helm-charts
+sources:
+  - https://github.com/modelsphere/helm-charts
+  - https://github.com/kvcache-ai/Mooncake
+type: application
+version: 0.1.0
+# The Mooncake version of the default image's mooncake_master (lmsysorg/sglang:v0.5.21).
+appVersion: "0.3.13"
+keywords: [mooncake, kv-cache, high-availability, etcd, nvme-of]

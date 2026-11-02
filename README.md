@@ -28,6 +28,7 @@ helm search repo modelsphere
 | [`bodylog-victorialogs`](charts/bodylog-victorialogs) | Ships bodylog's per-request records into VictoriaLogs (Vector next to the bodylog pod) and registers it as a Grafana datasource, for LogsQL search |
 | [`llm-autotune`](charts/llm-autotune) | [LLM AutoTune](https://github.com/modelsphere/llm-autotune): searches an inference engine's launch settings on your GPUs and ranks each configuration on a benchmark. API, worker, web UI and its own Postgres |
 | [`llm-bench`](charts/llm-bench) | [LLM Bench](https://github.com/modelsphere/llm-bench): the benchmark platform AutoTune measures with — synthetic sweeps and replays of recorded traffic, sampled from `bodylog-victorialogs`. API, workers, web UI, Postgres and Redis |
+| [`mooncake-master`](charts/mooncake-master) | Highly available [Mooncake](https://github.com/kvcache-ai/Mooncake) Store masters: replicas electing a leader through etcd (bundled or external), with an optional sidecar that re-registers NVMe-oF volumes after a failover |
 
 `sglang` and `vllm` pull in `cart` as a subchart, gated on `cart.enabled`.
 Installing either of them gives you an engine and a router that already know

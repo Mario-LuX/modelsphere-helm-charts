@@ -1,0 +1,143 @@
+{{- if .Values.etcd.enabled }}
+{{- $e := .Values.etcd }}
+{{- $name := include "mooncake-master.etcdName" . }}
+{{- $ns := .Release.Namespace }}
+{{- if lt (int $e.replicas) 3 }}
+{{- fail "mooncake-master: etcd.replicas must be >= 3 (an odd number): the election needs a quorum that survives losing a member" }}
+{{- end }}
+{{- if and $e.nodePort.enabled (not $e.nodePort.allowInsecureExternal) }}
+{{- fail "mooncake-master: etcd.nodePort.enabled exposes the election etcd on every node without TLS or auth; set etcd.nodePort.allowInsecureExternal=true to confirm" }}
+{{- end }}
+# Peer discovery: each member gets a stable DNS name, published before it is ready
+# because members must find each other before there is a quorum.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-headless
+  labels:
+    {{- include "mooncake-master.labels" . | nindent 4 }}
+    app.kubernetes.io/component: etcd
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "mooncake-master.etcdSelectorLabels" . | nindent 4 }}
+  ports:
+    - {name: client, port: 2379}
+    - {name: peer, port: 2380}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-client
+  labels:
+    {{- include "mooncake-master.labels" . | nindent 4 }}
+    app.kubernetes.io/component: etcd
+spec:
+  {{- if $e.nodePort.enabled }}
+  type: NodePort
+  {{- end }}
+  selector:
+    {{- include "mooncake-master.etcdSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: client
+      port: 2379
+      targetPort: 2379
+      {{- if $e.nodePort.enabled }}
+      nodePort: {{ $e.nodePort.port }}
+      {{- end }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "mooncake-master.labels" . | nindent 4 }}
+    app.kubernetes.io/component: etcd
+spec:
+  serviceName: {{ $name }}-headless
+  replicas: {{ $e.replicas }}
+  # All members must come up together to form the initial quorum.
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "mooncake-master.etcdSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mooncake-master.etcdSelectorLabels" . | nindent 8 }}
+    spec:
+      {{- with $e.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      affinity:
+        {{- with $e.affinity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        # One member per node: a majority survives losing any single node.
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  {{- include "mooncake-master.etcdSelectorLabels" . | nindent 18 }}
+              topologyKey: kubernetes.io/hostname
+      {{- with $e.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: etcd
+          image: "{{ $e.image.repository }}:{{ $e.image.tag }}"
+          imagePullPolicy: {{ $e.image.pullPolicy }}
+          command: [/usr/local/bin/etcd]
+          args:
+            - --name=$(POD_NAME)
+            - --data-dir=/var/lib/etcd
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --advertise-client-urls=http://$(POD_NAME).{{ $name }}-headless.{{ $ns }}.svc:2379
+            - --listen-peer-urls=http://0.0.0.0:2380
+            - --initial-advertise-peer-urls=http://$(POD_NAME).{{ $name }}-headless.{{ $ns }}.svc:2380
+            - --initial-cluster={{ range $i, $_ := until (int $e.replicas) }}{{ if $i }},{{ end }}{{ $name }}-{{ $i }}=http://{{ $name }}-{{ $i }}.{{ $name }}-headless.{{ $ns }}.svc:2380{{ end }}
+            - --initial-cluster-state=new
+            - --initial-cluster-token={{ $name }}
+            # Only leader election lives here; keep the raft log bounded.
+            - --auto-compaction-retention=1
+            - --quota-backend-bytes=2147483648
+          env:
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+          ports:
+            - {name: client, containerPort: 2379}
+            - {name: peer, containerPort: 2380}
+          readinessProbe:
+            httpGet: {path: /readyz, port: 2379}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /livez, port: 2379}
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            {{- toYaml $e.resources | nindent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/etcd}
+      {{- if not $e.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- if $e.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with $e.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $e.persistence.size }}
+  {{- end }}
+{{- end }}

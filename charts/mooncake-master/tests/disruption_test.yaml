@@ -1,0 +1,67 @@
+# Voluntary disruptions must never take both masters, or etcd's quorum, at once.
+suite: disruption budgets and etcd exposure
+release:
+  name: ci
+  namespace: mc
+tests:
+  - it: lets one master go at a time
+    template: templates/pdb.yaml
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.maxUnavailable
+          value: 1
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: master
+
+  - it: keeps a majority of the bundled etcd
+    template: templates/pdb.yaml
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.minAvailable
+          value: 2
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: etcd
+
+  - it: scales the etcd quorum with the member count
+    template: templates/pdb.yaml
+    documentIndex: 1
+    set:
+      etcd.replicas: 5
+    asserts:
+      - equal:
+          path: spec.minAvailable
+          value: 3
+
+  - it: has no etcd budget with an external etcd
+    template: templates/pdb.yaml
+    set:
+      etcd.enabled: false
+      ha.connstring: http://etcd-a:2379
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: refuses the etcd NodePort without the acknowledgement
+    template: templates/etcd.yaml
+    set:
+      etcd.nodePort.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "mooncake-master: etcd.nodePort.enabled exposes the election etcd on every node without TLS or auth; set etcd.nodePort.allowInsecureExternal=true to confirm"
+
+  - it: opens the etcd NodePort once acknowledged
+    template: templates/etcd.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-mooncake-master-etcd-client
+    set:
+      etcd.nodePort.enabled: true
+      etcd.nodePort.allowInsecureExternal: true
+    asserts:
+      - equal:
+          path: spec.type
+          value: NodePort

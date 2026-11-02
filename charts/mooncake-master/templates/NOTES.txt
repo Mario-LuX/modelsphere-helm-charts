@@ -1,0 +1,29 @@
+Mooncake masters: {{ .Values.master.replicas }} replicas of {{ include "mooncake-master.fullname" . }}, electing through {{ .Values.ha.backend }}
+  ({{ include "mooncake-master.haConnstring" . }}).
+
+Point Mooncake clients (engines, stores) at the HA backend, not at a master:
+
+  MOONCAKE_MASTER={{ include "mooncake-master.clientEntry" . }}
+
+They resolve the current leader through it and follow it across failovers. The
+client's Mooncake build needs -DSTORE_USE_ETCD=ON as well.
+{{- if ne .Values.master.clusterId "mooncake_cluster" }}
+
+The masters elect under cluster id "{{ .Values.master.clusterId }}". Clients look under
+"mooncake_cluster" unless told otherwise, so give every client:
+
+  MC_STORE_CLUSTER_ID={{ .Values.master.clusterId }}
+{{- end }}
+{{- if and .Values.etcd.enabled (not .Values.ha.connstring) }}
+{{- if .Values.etcd.nodePort.enabled }}
+Clients outside Kubernetes: etcd://<any-node-ip>:{{ .Values.etcd.nodePort.port }}
+This port has no TLS or authentication; keep it reachable only from the client nodes.
+{{- else }}
+Clients outside Kubernetes cannot resolve that Service name; set etcd.nodePort.enabled=true.
+{{- end }}
+{{- end }}
+
+Which replica leads: only the leader opens its RPC port ({{ .Values.master.ports.rpc }}), and its log says so:
+
+  kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=master -c master --tail=200 \
+    | grep "Master Admin Metrics" | tail -n {{ .Values.master.replicas }}

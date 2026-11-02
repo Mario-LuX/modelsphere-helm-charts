@@ -1,0 +1,158 @@
+# Mooncake Store masters in HA mode.
+#
+# Every replica runs mooncake_master with --enable_ha. They elect one leader through
+# the HA backend (etcd); the leader opens the RPC port and serves, the others wait as
+# standbys and take over when the leader's lease expires. Clients do NOT point at a
+# master address: they are given the backend instead, e.g.
+#   MOONCAKE_MASTER=etcd://<etcd-host>:2379
+# and follow the leader through it (see NOTES.txt after install).
+#
+# The mooncake_master binary must be built with -DSTORE_USE_ETCD=ON. Upstream release
+# builds are; a build without it rejects --ha_backend_type=etcd at start-up with
+# "Failed to parse HA backend config: UNAVAILABLE_IN_CURRENT_MODE". Clients that use
+# etcd:// need the same build flag.
+
+image:
+  # Any image that ships an etcd-enabled mooncake_master. lmsysorg/sglang includes the
+  # upstream Mooncake wheel; its mooncake_master is on PATH.
+  repository: lmsysorg/sglang
+  tag: v0.5.21
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+master:
+  replicas: 2
+  command: [mooncake_master]
+  # Election key namespace in etcd (mooncake-store/<clusterId>/master_view). Clients
+  # look the leader up under MC_STORE_CLUSTER_ID, or "mooncake_cluster" when it is
+  # unset, so a master with any other id is only found by clients that export the
+  # same value. Releases that share one external etcd must each use their own id.
+  clusterId: mooncake_cluster
+  ports:
+    rpc: 50051
+    httpMetadata: 8080
+    # A bind failure on the metrics port makes the master exit about a second after
+    # it logs "Master service started" -- check the port is free on hostNetwork nodes.
+    metrics: 9003
+  # Serve the transfer-engine metadata over HTTP from the master (instead of a
+  # separate metadata service).
+  httpMetadataServer: true
+  # Do not add --enable_oplog when NVMe-oF volumes are registered: it silently
+  # corrupts objects after a failover (see README, "NVMe-oF volumes").
+  extraArgs: []
+  #  - --eviction_high_watermark_ratio=0.95
+  env: []
+
+  # hostNetwork gives the master a stable, node-routable address and lets it reach
+  # storage networks the pod network does not (needed for NVMe-oF). The address it
+  # publishes to clients is the pod IP, which on hostNetwork is the node IP.
+  hostNetwork: true
+
+  # Some Mooncake builds link libcuda even for the master (and the NoF registrar
+  # imports store.so). Name the NVIDIA RuntimeClass here and set
+  # NVIDIA_VISIBLE_DEVICES=none in env: the driver libraries are injected, no GPU is.
+  # "none" works with the toolkit's legacy mode only; a CDI-mode class rejects it
+  # ("unresolvable CDI devices ...gpu=none"), so use the legacy class if both exist.
+  # With privileged: true the pod sees every /dev/nvidia* node anyway; the master
+  # creates no CUDA context and uses no GPU memory.
+  runtimeClassName: ""
+
+  # NVMe-oF via SPDK needs a privileged container, the RDMA devices and hugepages.
+  privileged: false
+  rdmaDevices: false          # mount /dev/infiniband
+  hugepages:
+    enabled: false
+    size: 2Gi                 # hugepages-2Mi request/limit; the node must advertise it
+
+  resources:
+    requests: {cpu: "2", memory: 4Gi}
+    limits: {cpu: "8", memory: 16Gi}
+
+  # One master per node, so a node failure leaves a standby to take over.
+  podAntiAffinity: required   # required | preferred | none
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+  podAnnotations: {}
+  priorityClassName: ""
+  # mooncake_master does not exit promptly on SIGTERM; it is killed when the grace
+  # period ends and keeps the leadership until then. Measured: with the default 30s,
+  # deleting the leader left the cluster leaderless for ~39s. Its state is in memory
+  # only, so a short grace period costs nothing a standby does not rebuild anyway.
+  terminationGracePeriodSeconds: 10
+
+ha:
+  backend: etcd
+  # etcd endpoints for the masters, e.g. http://etcd-0:2379;http://etcd-1:2379.
+  # Leave empty to use the bundled etcd below.
+  connstring: ""
+
+# A small etcd cluster for the election only (no KV data: oplog and snapshots stay
+# off), so the chart is self-contained. Disable it to use an existing etcd via
+# ha.connstring.
+etcd:
+  enabled: true
+  replicas: 3
+  image:
+    repository: registry.k8s.io/etcd
+    tag: 3.6.8-0
+    pullPolicy: IfNotPresent
+  persistence:
+    # Keep enabled in production: losing the raft log of all members resets the
+    # election state.
+    enabled: true
+    storageClass: ""
+    size: 10Gi
+  # Expose the client port on every node, for Mooncake clients that run outside
+  # Kubernetes (e.g. engines started with docker) and cannot resolve a Service name.
+  # The port is plain HTTP without authentication: anything that reaches a node can
+  # rewrite the election keys. Mooncake's etcd client supports neither TLS nor auth,
+  # so restrict it at the network level and acknowledge with allowInsecureExternal.
+  nodePort:
+    enabled: false
+    port: 32379
+    allowInsecureExternal: false
+  resources:
+    requests: {cpu: 500m, memory: 1Gi}
+    limits: {cpu: "2", memory: 4Gi}
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+
+# Re-registers NVMe-oF (NoF) volumes on whichever master is leading. Registration
+# lives only in the leader's memory, so without this a failover leaves the new leader
+# with an empty segment table. Requires a Mooncake build with NoF support
+# (MooncakeDistributedNoFRegister); upstream builds have none.
+nofRegistrar:
+  enabled: false
+  # Each volume: NQN, transport address (decides which NIC carries the traffic),
+  # port, and size in bytes (must be a multiple of 2 MiB).
+  volumes: []
+  #  - nqn: nqn.2004-12.com.example:array1-vol0
+  #    traddr: 192.0.2.10
+  #    port: 4420
+  #    size: 2199023255552
+  # Seconds between checks. After a failover the new leader rejects every put with
+  # "insufficient space" until the volumes are registered again, so this is added
+  # directly to the outage. Measured with a live client: 30 -> about 31s of failed
+  # puts (8s election + 23s waiting), 5 -> about 11s. A check is one metrics read.
+  interval: 5
+  # Decide leader/standby as usual but only log what would be registered.
+  dryRun: false
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+# PodDisruptionBudgets for voluntary disruptions such as node drains: at most one
+# master at a time, and never below etcd's quorum.
+podDisruptionBudget:
+  enabled: true
+
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  labels: {}

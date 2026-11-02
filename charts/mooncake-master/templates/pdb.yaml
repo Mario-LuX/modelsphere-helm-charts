@@ -1,0 +1,31 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+# One master at a time: the other keeps (or takes) the leadership.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "mooncake-master.fullname" . }}
+  labels:
+    {{- include "mooncake-master.labels" . | nindent 4 }}
+    app.kubernetes.io/component: master
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "mooncake-master.selectorLabels" . | nindent 6 }}
+{{- if .Values.etcd.enabled }}
+---
+# Keep a quorum (a majority of members) through any voluntary disruption.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "mooncake-master.etcdName" . }}
+  labels:
+    {{- include "mooncake-master.labels" . | nindent 4 }}
+    app.kubernetes.io/component: etcd
+spec:
+  minAvailable: {{ add (div (int .Values.etcd.replicas) 2) 1 }}
+  selector:
+    matchLabels:
+      {{- include "mooncake-master.etcdSelectorLabels" . | nindent 6 }}
+{{- end }}
+{{- end }}

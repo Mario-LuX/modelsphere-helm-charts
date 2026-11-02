@@ -1,0 +1,108 @@
+# The contract that makes HA work, pinned so a refactor cannot quietly undo it.
+suite: mooncake masters
+release:
+  name: ci
+  namespace: mc
+tests:
+  - it: elects through the bundled etcd by default and publishes the pod IP
+    template: templates/statefulset.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --ha_backend_connstring=http://ci-mooncake-master-etcd-client.mc.svc:2379
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --rpc_address=$(POD_IP)
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --enable_ha
+      - equal:
+          path: spec.replicas
+          value: 2
+
+  - it: probes the metrics port, which standbys open too -- not the leader-only RPC port
+    template: templates/statefulset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.tcpSocket.port
+          value: metrics
+
+  - it: uses an external etcd when given one
+    template: templates/statefulset.yaml
+    set:
+      etcd.enabled: false
+      ha.connstring: http://etcd-a:2379;http://etcd-b:2379
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --ha_backend_connstring=http://etcd-a:2379;http://etcd-b:2379
+
+  - it: refuses to render without any etcd
+    template: templates/statefulset.yaml
+    set:
+      etcd.enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: "mooncake-master: set ha.connstring to your etcd endpoints, or enable the bundled etcd (etcd.enabled=true)"
+
+  - it: refuses a single replica
+    template: templates/statefulset.yaml
+    set:
+      master.replicas: 1
+    asserts:
+      - failedTemplate:
+          errorMessage: "mooncake-master: master.replicas must be >= 2 -- a single master has nothing to fail over to"
+
+  - it: has no registrar unless asked
+    template: templates/statefulset.yaml
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 1
+
+  - it: registrar targets the pod IP, not loopback
+    template: templates/statefulset.yaml
+    set:
+      nofRegistrar.enabled: true
+      nofRegistrar.volumes:
+        - {nqn: nqn.test:vol0, traddr: 192.0.2.10, port: 4420, size: 2199023255552}
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 2
+      - contains:
+          path: spec.template.spec.containers[1].args
+          content: --master=$(POD_IP):50051
+
+  - it: writes the volume file with sizes as integers
+    template: templates/configmap-registrar.yaml
+    set:
+      nofRegistrar.enabled: true
+      nofRegistrar.volumes:
+        - {nqn: nqn.test:vol0, traddr: 192.0.2.10, port: 4420, size: 2199023255552}
+    asserts:
+      - matchRegex:
+          path: data["volumes.conf"]
+          pattern: "nqn.test:vol0 192.0.2.10 4420 2199023255552"
+
+  # The check lives in the ConfigMap template; the StatefulSet includes that template
+  # for its checksum annotation, so the render failure surfaces there first.
+  - it: rejects a volume size that is not 2 MiB aligned
+    template: templates/statefulset.yaml
+    set:
+      nofRegistrar.enabled: true
+      nofRegistrar.volumes:
+        - {nqn: nqn.test:vol0, traddr: 192.0.2.10, port: 4420, size: 1000}
+    asserts:
+      - failedTemplate:
+          errorMessage: "mooncake-master: volume nqn.test:vol0 size 1000 is not a multiple of 2 MiB"
+
+  - it: bundled etcd lists every member in the initial cluster
+    template: templates/etcd.yaml
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --initial-cluster=ci-mooncake-master-etcd-0=http://ci-mooncake-master-etcd-0.ci-mooncake-master-etcd-headless.mc.svc:2380,ci-mooncake-master-etcd-1=http://ci-mooncake-master-etcd-1.ci-mooncake-master-etcd-headless.mc.svc:2380,ci-mooncake-master-etcd-2=http://ci-mooncake-master-etcd-2.ci-mooncake-master-etcd-headless.mc.svc:2380

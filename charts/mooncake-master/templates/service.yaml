@@ -1,0 +1,18 @@
+{{- $fullname := include "mooncake-master.fullname" . }}
+# Headless: stable per-replica DNS and a scrape target for metrics. Clients do not
+# use it to find the leader -- they follow the HA backend (see NOTES.txt).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "mooncake-master.labels" . | nindent 4 }}
+    app.kubernetes.io/component: master
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "mooncake-master.selectorLabels" . | nindent 4 }}
+  ports:
+    - {name: rpc, port: {{ .Values.master.ports.rpc }}, targetPort: rpc}
+    - {name: metrics, port: {{ .Values.master.ports.metrics }}, targetPort: metrics}

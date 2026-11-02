@@ -1,0 +1,192 @@
+{{- if ne .Values.ha.backend "etcd" }}
+{{- fail (printf "mooncake-master: ha.backend %q is not supported by this chart yet; only etcd" .Values.ha.backend) }}
+{{- end }}
+{{- if lt (int .Values.master.replicas) 2 }}
+{{- fail "mooncake-master: master.replicas must be >= 2 -- a single master has nothing to fail over to" }}
+{{- end }}
+{{- $fullname := include "mooncake-master.fullname" . }}
+{{- $m := .Values.master }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "mooncake-master.labels" . | nindent 4 }}
+    app.kubernetes.io/component: master
+spec:
+  serviceName: {{ $fullname }}
+  replicas: {{ $m.replicas }}
+  # Replicas are peers in an election, not an ordered set: start them together.
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "mooncake-master.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mooncake-master.selectorLabels" . | nindent 8 }}
+      annotations:
+        {{- if .Values.nofRegistrar.enabled }}
+        checksum/registrar: {{ include (print $.Template.BasePath "/configmap-registrar.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with $m.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      terminationGracePeriodSeconds: {{ $m.terminationGracePeriodSeconds }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $m.hostNetwork }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      {{- with $m.runtimeClassName }}
+      runtimeClassName: {{ . }}
+      {{- end }}
+      {{- with $m.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with $m.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if or $m.affinity (ne $m.podAntiAffinity "none") }}
+      affinity:
+        {{- with $m.affinity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if eq $m.podAntiAffinity "required" }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  {{- include "mooncake-master.selectorLabels" . | nindent 18 }}
+              topologyKey: kubernetes.io/hostname
+        {{- else if eq $m.podAntiAffinity "preferred" }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "mooncake-master.selectorLabels" . | nindent 20 }}
+                topologyKey: kubernetes.io/hostname
+        {{- end }}
+      {{- end }}
+      {{- with $m.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: master
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            {{- toYaml $m.command | nindent 12 }}
+          args:
+            - --enable_ha
+            - --ha_backend_type={{ .Values.ha.backend }}
+            - --ha_backend_connstring={{ include "mooncake-master.haConnstring" . }}
+            - --cluster_id={{ $m.clusterId }}
+            # Required in HA mode: the elected leader publishes this address through
+            # the backend, and clients connect to it. The RPC port binds to it only
+            # (not to loopback).
+            - --rpc_address=$(POD_IP)
+            - --rpc_port={{ $m.ports.rpc }}
+            {{- if $m.httpMetadataServer }}
+            - --enable_http_metadata_server=true
+            - --http_metadata_server_port={{ $m.ports.httpMetadata }}
+            {{- end }}
+            - --metrics_port={{ $m.ports.metrics }}
+            {{- with $m.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
+            - name: POD_IP
+              valueFrom: {fieldRef: {fieldPath: status.podIP}}
+            {{- with $m.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - {name: rpc, containerPort: {{ $m.ports.rpc }}}
+            {{- if $m.httpMetadataServer }}
+            - {name: http-metadata, containerPort: {{ $m.ports.httpMetadata }}}
+            {{- end }}
+            - {name: metrics, containerPort: {{ $m.ports.metrics }}}
+          # Probes use the metrics port, which leader and standby both open. The RPC
+          # port is open on the leader only, so probing it would hold every standby
+          # NotReady and stall a rolling update on the first standby it replaces.
+          readinessProbe:
+            tcpSocket: {port: metrics}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: {port: metrics}
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 4
+          {{- if $m.privileged }}
+          securityContext:
+            privileged: true
+          {{- end }}
+          resources:
+            {{- $res := deepCopy $m.resources }}
+            {{- if $m.hugepages.enabled }}
+            {{- $_ := set (default dict $res.requests) "hugepages-2Mi" $m.hugepages.size }}
+            {{- $_ := set (default dict $res.limits) "hugepages-2Mi" $m.hugepages.size }}
+            {{- end }}
+            {{- toYaml $res | nindent 12 }}
+          {{- if or $m.hugepages.enabled $m.rdmaDevices }}
+          volumeMounts:
+            {{- if $m.hugepages.enabled }}
+            - {name: hugepages, mountPath: /dev/hugepages}
+            {{- end }}
+            {{- if $m.rdmaDevices }}
+            - {name: infiniband, mountPath: /dev/infiniband}
+            {{- end }}
+          {{- end }}
+        {{- if .Values.nofRegistrar.enabled }}
+        {{- $r := .Values.nofRegistrar }}
+        - name: registrar
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [python3, /etc/mooncake/registrar.py]
+          args:
+            - --volumes=/etc/mooncake/volumes.conf
+            # The pod IP, not 127.0.0.1: the RPC port binds to --rpc_address only.
+            - --master=$(POD_IP):{{ $m.ports.rpc }}
+            - --metrics-port={{ $m.ports.metrics }}
+            - --interval={{ $r.interval }}
+            {{- if $r.dryRun }}
+            - --dry-run
+            {{- end }}
+          env:
+            - name: POD_IP
+              valueFrom: {fieldRef: {fieldPath: status.podIP}}
+            {{- with $m.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - {name: registrar, mountPath: /etc/mooncake}
+          resources:
+            {{- toYaml $r.resources | nindent 12 }}
+        {{- end }}
+      {{- if or $m.hugepages.enabled $m.rdmaDevices .Values.nofRegistrar.enabled }}
+      volumes:
+        {{- if $m.hugepages.enabled }}
+        - name: hugepages
+          emptyDir: {medium: HugePages-2Mi}
+        {{- end }}
+        {{- if $m.rdmaDevices }}
+        - name: infiniband
+          hostPath: {path: /dev/infiniband}
+        {{- end }}
+        {{- if .Values.nofRegistrar.enabled }}
+        - name: registrar
+          configMap:
+            name: {{ $fullname }}-registrar
+            defaultMode: 0755
+        {{- end }}
+      {{- end }}

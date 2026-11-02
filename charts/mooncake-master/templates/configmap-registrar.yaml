@@ -1,0 +1,25 @@
+{{- if .Values.nofRegistrar.enabled }}
+{{- if not .Values.nofRegistrar.volumes }}
+{{- fail "mooncake-master: nofRegistrar.enabled needs at least one entry in nofRegistrar.volumes" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mooncake-master.fullname" . }}-registrar
+  labels:
+    {{- include "mooncake-master.labels" . | nindent 4 }}
+data:
+  registrar.py: |
+{{ .Files.Get "files/registrar.py" | indent 4 }}
+  # nqn traddr port size_bytes
+  volumes.conf: |
+    {{- range .Values.nofRegistrar.volumes }}
+    {{- if or (not .nqn) (not .traddr) (not .port) (not .size) }}
+    {{- fail "mooncake-master: every nofRegistrar.volumes entry needs nqn, traddr, port and size" }}
+    {{- end }}
+    {{- if ne (mod (int64 .size) 2097152) (int64 0) }}
+    {{- fail (printf "mooncake-master: volume %s size %v is not a multiple of 2 MiB" .nqn .size) }}
+    {{- end }}
+    {{ .nqn }} {{ .traddr }} {{ .port }} {{ int64 .size }}
+    {{- end }}
+{{- end }}
