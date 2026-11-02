@@ -466,7 +466,7 @@
   {{- if $cacheEnabled }}
   {{- $chartEnv = concat $chartEnv (list
         (dict "name" "SGLANG_CACHE_HOST_DIR" "value" "/var/cache/sglang-host")
-        (dict "name" "SGLANG_CACHE_TEMPLATE_HASH" "value" (include "sglang.cacheTemplateHash" $root))
+        (dict "name" "SGLANG_CACHE_TEMPLATE_HASH" "value" (include "sglang.cacheTemplateHash" (dict "root" $root "role" $role "roleCfg" $roleCfg "pdRole" $pdRole)))
         (dict "name" "SGLANG_CACHE_MAX_SLOTS" "value" (printf "%v" ($cache.maxSlotsPerNode | default 8)))
         (dict "name" "SGLANG_CACHE_HISTORY_LIMIT" "value" (printf "%v" ($cache.historyLimit | default 2)))) }}
   {{- end }}

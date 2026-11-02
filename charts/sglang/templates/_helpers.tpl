@@ -85,22 +85,41 @@
 
 {{/*
   Template hash for cache isolation. Evaluates all inputs that define compiled kernel compatibility:
-  image repo & tag, model name, context length, extraArgs, and compiler-relevant environment variables.
+  image repo & tag, model name, context length, extraArgs, the calling pd role's
+  extraArgs, and compiler-relevant environment variables.
+  pd.<role>.extraArgs are appended after the top-level list on the command line
+  (_pod.tpl, including colocate). They are hashed when pdRole is true, and only
+  when that list is non-empty, so a non-pd render and a pd role with no role
+  flags keep the previous input list. pdRole comes from sglang.engineIdentity.
+
+  include "sglang.cacheTemplateHash" (dict "root" $root "role" $role "roleCfg" $roleCfg "pdRole" $pdRole)
 */}}
 {{- define "sglang.cacheTemplateHash" -}}
+{{- $root := .root -}}
+{{- $role := .role | default "" -}}
+{{- $roleCfg := .roleCfg | default dict -}}
+{{- $pdRole := .pdRole | default false -}}
 {{- $envList := list -}}
-{{- range .Values.env -}}
+{{- range $root.Values.env -}}
   {{- $envList = append $envList (printf "%s=%s" .name (include "sglang.envValueString" .value)) -}}
 {{- end -}}
+{{- /* Role flags land after the top-level extraArgs. Omit an empty list so the
+       hashed input stays byte-for-byte what a non-pd pod has always hashed. */ -}}
 {{- $inputs := list
-      .Values.image.repository
-      .Values.image.tag
-      .Values.model.name
-      .Values.model.contextLength
-      .Values.extraArgs
-      $envList
-    | toJson -}}
-{{- sha256sum $inputs | trunc 10 -}}
+      $root.Values.image.repository
+      $root.Values.image.tag
+      $root.Values.model.name
+      $root.Values.model.contextLength
+      $root.Values.extraArgs
+-}}
+{{- if $pdRole -}}
+{{- $roleArgs := $roleCfg.extraArgs | default list -}}
+{{- if $roleArgs -}}
+{{- $inputs = append $inputs $roleArgs -}}
+{{- end -}}
+{{- end -}}
+{{- $inputs = append $inputs $envList -}}
+{{- $inputs | toJson | sha256sum | trunc 10 -}}
 {{- end -}}
 
 {{/*

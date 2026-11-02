@@ -1,0 +1,56 @@
+# Host-level compile cache. pd.<role>.extraArgs are part of the template hash,
+# and a null cache value must render rather than fail the configmap.
+suite: host-level compile cache
+release:
+  name: ci
+set:
+  modelRoute.nginx.outputConfigMap: ci/openresty-conf
+  cache.enabled: true
+tests:
+  - it: prefill and decode with different role extraArgs get different template hashes
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: kind
+      value: DisaggregatedSet
+    set:
+      scaler.enabled: false
+      pd.enabled: true
+      rdma.enabled: true
+      pd.prefill.gpus: 1
+      pd.decode.gpus: 1
+      pd.prefill.extraArgs:
+        - "--tp"
+        - "4"
+        - "--mem-fraction-static"
+        - "0.9"
+      pd.decode.extraArgs:
+        - "--tp"
+        - "2"
+        - "--disable-cuda-graph"
+    asserts:
+      - equal:
+          path: spec.roles[?(@.name == "prefill")].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "sglang")].env[?(@.name == "SGLANG_CACHE_TEMPLATE_HASH")].value
+          value: cc89de6349
+      - equal:
+          path: spec.roles[?(@.name == "decode")].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "sglang")].env[?(@.name == "SGLANG_CACHE_TEMPLATE_HASH")].value
+          value: cec1369a4c
+      - notEqual:
+          path: spec.roles[?(@.name == "decode")].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "sglang")].env[?(@.name == "SGLANG_CACHE_TEMPLATE_HASH")].value
+          value: cc89de6349
+
+---
+# `cache:` with no body is YAML null. Own suite so it is not merged onto
+# cache.enabled from the suite above.
+suite: null cache value
+release:
+  name: ci
+set:
+  modelRoute.nginx.outputConfigMap: ci/openresty-conf
+tests:
+  - it: renders when cache is null
+    template: templates/cache-configmap.yaml
+    set:
+      cache: null
+    asserts:
+      - hasDocuments:
+          count: 0

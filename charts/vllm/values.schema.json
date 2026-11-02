@@ -681,6 +681,18 @@
     },
 
     "env": { "type": "array" },
+    "cache": {
+      "description": "Host-level compile cache management (VLLM_CACHE_ROOT, TRITON_CACHE_DIR, TORCHINDUCTOR_CACHE_DIR, CUDA_CACHE_PATH, DG_JIT_CACHE_DIR, FLASHINFER_WORKSPACE_BASE and HF_HOME, all pointed into one leased slot). Provides template-hash isolation, per-node slot leasing via kernel flock, warm reuse, and automatic garbage collection.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "hostPath": { "type": "string" },
+        "hostPathSuffix": { "type": "string" },
+        "historyLimit": { "type": "integer", "minimum": 1 },
+        "maxSlotsPerNode": { "type": "integer", "minimum": 1, "maximum": 64 }
+      }
+    },
     "volumes": { "type": "array" },
     "volumeMounts": { "type": "array" },
     "tolerations": { "type": "array" },

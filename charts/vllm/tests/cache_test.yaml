@@ -1,0 +1,207 @@
+# cache.enabled wraps every engine command in cache_manager.py, hands it the
+# slot-pool settings through env, and mounts the host cache and the script.
+# Off by default, and off under commandOverride, which owns the command line.
+suite: host-level compile cache
+release:
+  name: ci
+set:
+  modelRoute.nginx.outputConfigMap: ci/openresty-conf
+  cache.enabled: true
+tests:
+  - it: single-node exec form runs vllm serve under the cache manager
+    template: templates/deployment.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "vllm")].command
+          value: ["python3", "/opt/vllm-cache/cache_manager.py", "--", "vllm", "serve"]
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: VLLM_CACHE_HOST_DIR
+            value: /var/cache/vllm-host
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: VLLM_CACHE_MAX_SLOTS
+            value: "8"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: VLLM_CACHE_HISTORY_LIMIT
+            value: "2"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "vllm")].volumeMounts
+          content:
+            name: host-cache
+            mountPath: /var/cache/vllm-host
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: host-cache
+            hostPath:
+              path: /mnt/disk0/vllm-cache/facebook--opt-125m
+              type: DirectoryOrCreate
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: cache-manager-script
+            configMap:
+              name: ci-cache-manager
+              defaultMode: 0755
+
+  - it: multi-node shell form execs the cache manager on leader and worker
+    template: templates/lws.yaml
+    set:
+      lws.enabled: true
+      lws.size: 2
+    asserts:
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: 'exec python3 /opt/vllm-cache/cache_manager.py -- \\\n\s+vllm serve'
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: 'exec python3 /opt/vllm-cache/cache_manager.py -- \\\n\s+vllm serve'
+      - contains:
+          path: spec.leaderWorkerTemplate.workerTemplate.spec.volumes
+          content:
+            name: host-cache
+            hostPath:
+              path: /mnt/disk0/vllm-cache/facebook--opt-125m
+              type: DirectoryOrCreate
+
+  - it: hostPathSuffix "" mounts hostPath itself
+    template: templates/deployment.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      cache.hostPathSuffix: ""
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: host-cache
+            hostPath:
+              path: /mnt/disk0/vllm-cache
+              type: DirectoryOrCreate
+
+  - it: renders the cache manager script
+    template: templates/cache-configmap.yaml
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: ci-cache-manager
+      - matchRegex:
+          path: data["cache_manager.py"]
+          pattern: VLLM_CACHE_ROOT
+
+  - it: stays off under commandOverride
+    template: templates/deployment.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      commandOverride: ["sleep", "inf"]
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "vllm")].command
+          value: ["sleep", "inf"]
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: cache-manager-script
+            configMap:
+              name: ci-cache-manager
+              defaultMode: 0755
+
+  - it: is off by default
+    template: templates/deployment.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      cache.enabled: false
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "vllm")].command
+          value: ["vllm", "serve"]
+
+  - it: refuses a volume mounted where the cache symlink goes
+    template: templates/deployment.yaml
+    set:
+      volumes:
+        - name: mine
+          emptyDir: {}
+      volumeMounts:
+        - name: mine
+          mountPath: /root/.cache/vllm
+    asserts:
+      - failedTemplate:
+          errorPattern: "cache.enabled is true, but volumeMounts carries a mount at /root/.cache/vllm"
+
+  - it: refuses a non-root runAsUser without env HOME
+    template: templates/deployment.yaml
+    set:
+      securityContext:
+        runAsUser: 1000
+    asserts:
+      - failedTemplate:
+          errorPattern: "requires env HOME"
+
+  # pd.<role>.extraArgs are appended after the top-level list and have to be
+  # part of the compile-cache hash, or prefill and decode share one template
+  # directory. Non-colocate: scaler off, rdma on, an explicit GPU split.
+  - it: prefill and decode with different role extraArgs get different template hashes
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: kind
+      value: DisaggregatedSet
+    set:
+      scaler.enabled: false
+      pd.enabled: true
+      rdma.enabled: true
+      pd.prefill.gpus: 1
+      pd.decode.gpus: 1
+      pd.prefill.extraArgs:
+        - "--tensor-parallel-size"
+        - "4"
+        - "--gpu-memory-utilization"
+        - "0.9"
+      pd.decode.extraArgs:
+        - "--tensor-parallel-size"
+        - "2"
+        - "--enforce-eager"
+    asserts:
+      - equal:
+          path: spec.roles[?(@.name == "prefill")].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].env[?(@.name == "VLLM_CACHE_TEMPLATE_HASH")].value
+          value: e10c53668a
+      - equal:
+          path: spec.roles[?(@.name == "decode")].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].env[?(@.name == "VLLM_CACHE_TEMPLATE_HASH")].value
+          value: f7506d89be
+      - notEqual:
+          path: spec.roles[?(@.name == "decode")].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].env[?(@.name == "VLLM_CACHE_TEMPLATE_HASH")].value
+          value: e10c53668a
+
+---
+# `cache:` with no body is YAML null. The schema's type object does not reject
+# it, so the configmap has to tolerate a nil cache the way the pod templates do.
+# Its own suite: the one above sets cache.enabled, and a later null would only
+# be layered on top of that map.
+suite: null cache value
+release:
+  name: ci
+set:
+  modelRoute.nginx.outputConfigMap: ci/openresty-conf
+tests:
+  - it: renders when cache is null
+    template: templates/cache-configmap.yaml
+    set:
+      cache: null
+    asserts:
+      - hasDocuments:
+          count: 0

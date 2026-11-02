@@ -1176,8 +1176,9 @@ dnsPolicy: ""
 # write corruption on shared hostPaths when multiple pods land on the same node.
 #
 #   - Template Hash: Derives a hash from image repo/tag, model config, extraArgs
-#     and compiler envs. Any image tag or flag change automatically switches to a
-#     fresh, clean cache directory on the node.
+#     (top-level, plus the calling pd role's extraArgs) and compiler envs. Any
+#     image tag or flag change automatically switches to a fresh, clean cache
+#     directory on the node.
 #   - Slot Leasing & Mutual Exclusion: Uses non-blocking kernel file locks (flock)
 #     across per-node slots (slot-0 .. slot-N). No two concurrent pods on the same
 #     node can ever share a cache directory.

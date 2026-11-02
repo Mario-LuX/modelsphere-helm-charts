@@ -169,6 +169,26 @@ spec:
           path: {{ $root.Values.model.localPath }}
           type: {{ $root.Values.model.hostPathType }}
       {{- end }}
+      {{- /* The colocate engines come from vllm.engineContainers, which mounts
+             the cache-manager volumes when cache.enabled -- the volumes have to
+             exist on this pod too. Same shape as vllm.podSpec. */}}
+      {{- $cache := $root.Values.cache | default dict }}
+      {{- /* commandOverride owns the command line, so cache.enabled stays off --
+             same rule as vllm.engineIdentity. */}}
+      {{- $cacheEnabled := and ($cache.enabled | default false) (kindIs "invalid" $root.Values.commandOverride) }}
+      {{- if $cacheEnabled }}
+      {{- $cacheSuffix := ternary $cache.hostPathSuffix (include "vllm.cacheModelDir" $root) (not (kindIs "invalid" $cache.hostPathSuffix)) }}
+      {{- $cacheBaseHostPath := $cache.hostPath | default "/mnt/disk0/vllm-cache" | trimSuffix "/" }}
+      {{- $cacheFullHostPath := ternary (printf "%s/%s" $cacheBaseHostPath $cacheSuffix) $cacheBaseHostPath (ne (toString $cacheSuffix) "") }}
+      - name: host-cache
+        hostPath:
+          path: {{ $cacheFullHostPath }}
+          type: DirectoryOrCreate
+      - name: cache-manager-script
+        configMap:
+          name: {{ $fullname }}-cache-manager
+          defaultMode: 0755
+      {{- end }}
       {{- /* /dev/shm, sized for the two engines' multiproc IPC (see
              values.yaml under shm). The chart mounts one unless a values
              file already mounts /dev/shm for itself; that also keeps the

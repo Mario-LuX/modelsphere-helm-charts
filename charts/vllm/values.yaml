@@ -1226,13 +1226,67 @@ hostNetwork: false
 # leader's own hostname among them.
 dnsPolicy: ""
 
+# Host-level compile cache management (VLLM_CACHE_ROOT -- vLLM's torch.compile
+# artifacts -- plus Triton, Inductor, FlashInfer, DeepGEMM, the CUDA driver cache
+# and HF_HOME).
+# Solves the dual problems of 40-minute cold-compilation restarts and concurrent
+# write corruption on shared hostPaths when multiple pods land on the same node.
+#
+#   - Template Hash: Derives a hash from image repo/tag, model config, extraArgs
+#     (top-level, plus the calling pd role's extraArgs) and compiler envs. Any
+#     image tag or flag change automatically switches to a fresh, clean cache
+#     directory on the node.
+#   - Slot Leasing & Mutual Exclusion: Uses non-blocking kernel file locks (flock)
+#     across per-node slots (slot-0 .. slot-N). No two concurrent pods on the same
+#     node can ever share a cache directory.
+#   - Warm Reuse: A replacement pod on the same node acquires the released lock
+#     and reuses the warm cache, avoiding 20-40 min cold compilation.
+#   - In-Pod GC: Keeps historyLimit template hashes per hostPathSuffix, the current one
+#     included, and prunes the older ones, safely skipping any still leased by
+#     running or draining pods.
+#
+# When enabled, the chart mounts the host cache and the engine runs under a
+# small manager that leases a slot and points each cache into it before exec'ing
+# `vllm serve`. Unlike sglang, vLLM has no single root for everything it
+# compiles, so the manager sets one variable per cache, all inside the slot:
+# VLLM_CACHE_ROOT, TRITON_CACHE_DIR, TORCHINDUCTOR_CACHE_DIR, CUDA_CACHE_PATH,
+# DG_JIT_CACHE_DIR, FLASHINFER_WORKSPACE_BASE and HF_HOME. It sets them over
+# whatever env says, so do not set those yourself while this is on. It also
+# symlinks ~/.cache/vllm to the slot's VLLM_CACHE_ROOT so vLLM's own default
+# path resolves there as well. Do not mount a volume at ~/.cache/vllm while this
+# is on -- ~/.cache itself is fine.
+# The render-time collision guard resolves ~ from env HOME (default /root, matching
+# empty securityContext / image root). Non-root runAsUser must set env HOME.
+cache:
+  enabled: false
+  # Host directory root where model caches are stored.
+  hostPath: "/mnt/disk0/vllm-cache"
+
+  # Subdirectory of hostPath this release's caches live in. Defaults to
+  # model.name, with "/" and ":" folded to "--" -- so two releases serving the
+  # same model on one node SHARE their compiled kernels rather than each
+  # compiling a private copy, while different models stay apart. Sharing is safe:
+  # the template hash still separates incompatible images and flags, and the slot
+  # lease still keeps concurrent pods out of each other's directory.
+  #
+  # Set it explicitly to keep a release's cache to itself (the release name is
+  # the obvious choice), or to "" to mount hostPath directly.
+  # hostPathSuffix: ""
+
+  # Template hash directories to keep in each hostPath subdirectory on a node
+  # Older templates a pod still holds are never purged.
+  historyLimit: 2
+  # Maximum concurrent pod slots per node (e.g. 1 for 8-GPU, 4 for 2-GPU, up to 8).
+  maxSlotsPerNode: 8
+
 # Additional volumes on the output Deployment definition. The model volume built
 # from model.localPath is always mounted; these are added alongside it.
 #
 # Be careful with hostPath: with the scaler on, several replicas can land on one
 # node and would then share it. Read-only reference data (the model itself) is
 # fine that way. Anything the server WRITES is not -- a JIT or compile cache
-# shared by concurrent pods corrupts, so give those an emptyDir per pod.
+# shared by concurrent pods corrupts, so give those an emptyDir per pod, or let
+# cache: above manage a host-level one.
 volumes: []
   # - name: shm
   #   emptyDir:

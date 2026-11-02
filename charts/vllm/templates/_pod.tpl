@@ -103,10 +103,15 @@
 {{- $nixlHttpPort := ternary (int ($nixl.httpPort | default 5597)) 0 $pdRole }}
 {{- $nixlBackends := ternary ($nixl.backends | default (list "UCX")) (list) $pdRole }}
 {{- $preStop := $root.Values.lifecycle.preStop }}
+{{- $cache := $root.Values.cache | default dict }}
 {{- /* Defined -- including as [] -- takes the container over, and nothing below
        is built. [] renders no command at all: the image's ENTRYPOINT. */}}
 {{- $cmd := $root.Values.commandOverride }}
 {{- $override := not (kindIs "invalid" $cmd) }}
+{{- $cacheEnabled := and ($cache.enabled | default false) (not $override) }}
+{{- $cacheSuffix := ternary $cache.hostPathSuffix (include "vllm.cacheModelDir" $root) (not (kindIs "invalid" $cache.hostPathSuffix)) }}
+{{- $cacheBaseHostPath := $cache.hostPath | default "/mnt/disk0/vllm-cache" | trimSuffix "/" }}
+{{- $cacheFullHostPath := ternary (printf "%s/%s" $cacheBaseHostPath $cacheSuffix) $cacheBaseHostPath (ne (toString $cacheSuffix) "") }}
 {{- /* Empty means no model volume: no hostPath, no mount. */}}
 {{- $hasModel := ne (toString ($root.Values.model.localPath | default "")) "" }}
 {{- if and $override $root.Values.extraArgs }}
@@ -120,6 +125,42 @@
        silently drop a setting that does meaningful work elsewhere. */}}
 {{- if $root.Values.storageKVOffload.enabled | default false }}
 {{- fail "vllm: storageKVOffload is not implemented on this chart (kept as a stub for sglang-chart parity). Use localKVOffload instead, or drop the section" }}
+{{- end }}
+{{- /* The cache manager replaces ~/.cache/vllm with a symlink into the slot it
+       leases (wire_cache uses expanduser("~")), so a volume mounted there --
+       and only there -- would collide. A mount on ~/.cache itself is fine: the
+       symlink is made inside it.
+
+       Resolve ~ the same way the chart can see it: env HOME if set, else /root
+       (empty securityContext → image root). Non-root runAsUser without HOME is
+       refused so this guard cannot silently check the wrong path. */}}
+{{- if $cacheEnabled }}
+{{- $homeFromEnv := false }}
+{{- $homeFromValueFrom := false }}
+{{- range $root.Values.env }}
+{{- if eq .name "HOME" }}
+{{- if and (hasKey . "value") (ne (include "vllm.envValueString" .value) "") }}
+{{- $homeFromEnv = true }}
+{{- else if hasKey . "valueFrom" }}
+{{- $homeFromValueFrom = true }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- $sc := $root.Values.securityContext | default dict }}
+{{- $nonRoot := and (hasKey $sc "runAsUser") (ne (int $sc.runAsUser) 0) }}
+{{- if and $nonRoot (not $homeFromEnv) }}
+{{- fail "vllm: cache.enabled with securityContext.runAsUser != 0 requires env HOME (a plain value, not valueFrom) so the managed-cache collision check matches wire_cache's expanduser(\"~\"); set env HOME to the container home, or run as root" }}
+{{- end }}
+{{- if $homeFromValueFrom }}
+{{- fail "vllm: cache.enabled cannot resolve env HOME from valueFrom at render time; set HOME to a plain value so the managed-cache collision check matches wire_cache's expanduser(\"~\")" }}
+{{- end }}
+{{- $cacheLink := printf "%s/.cache/vllm" (include "vllm.cacheHome" $root) }}
+{{- range $vm := $root.Values.volumeMounts }}
+{{- $mp := clean (toString $vm.mountPath) }}
+{{- if or (eq $mp $cacheLink) (hasPrefix (printf "%s/" $cacheLink) $mp) }}
+{{- fail (printf "vllm: cache.enabled is true, but volumeMounts carries a mount at %s (volume %q). That path (%s) is where the managed cache symlinks the host slot it leases; remove the manual volumeMount, or turn cache.enabled off and manage the directory yourself" $vm.mountPath ($vm.name | default "unnamed") $cacheLink) }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- /*
   The engine command line, built once so both command forms say the same thing.
@@ -305,7 +346,11 @@
       "override" $override
       "expand" $expand
       "l2" $l2
-      "flags" $flags) -}}
+      "flags" $flags
+      "cacheEnabled" $cacheEnabled
+      "cacheSuffix" $cacheSuffix
+      "cacheBaseHostPath" $cacheBaseHostPath
+      "cacheFullHostPath" $cacheFullHostPath) -}}
 {{- end -}}
 
 {{/*
@@ -344,6 +389,13 @@
 {{- $expand := $e.expand }}
 {{- $flags := $e.flags }}
 {{- $preStop := $root.Values.lifecycle.preStop }}
+{{- /* Host-level compile-cache management (see cache in values.yaml): when
+       enabled, the engine command is wrapped in cache_manager.py, which leases
+       a per-node slot, points vLLM's compile caches into it and symlinks
+       ~/.cache/vllm at it. Disabled under commandOverride, which owns the
+       command line. */}}
+{{- $cache := $root.Values.cache | default dict }}
+{{- $cacheEnabled := $e.cacheEnabled }}
 {{- /* /dev/shm: the chart mounts one unless the values already do. A user who
        mounts /dev/shm through volumeMounts keeps ownership of it -- emitting
        the chart's as well would put two mounts on the same path and the pod
@@ -401,10 +453,20 @@
   {{- with $root.Values.extraInitShell }}
       {{ . | nindent 6 | trim }}
   {{- end }}
+      {{- if $cacheEnabled }}
+      exec python3 /opt/vllm-cache/cache_manager.py -- \
+        vllm serve{{ range $flags }} \
+          {{ if has . $expand }}"{{ . }}"{{ else }}'{{ replace "'" "'\\''" . }}'{{ end }}{{ end }}
+      {{- else }}
       exec vllm serve{{ range $flags }} \
         {{ if has . $expand }}"{{ . }}"{{ else }}'{{ replace "'" "'\\''" . }}'{{ end }}{{ end }}
+      {{- end }}
+  {{- else }}
+  {{- if $cacheEnabled }}
+  command: ["python3", "/opt/vllm-cache/cache_manager.py", "--", "vllm", "serve"]
   {{- else }}
   command: ["vllm", "serve"]
+  {{- end }}
   args:
     {{- range $flags }}
     - {{ . | quote }}
@@ -456,6 +518,16 @@
         (dict "name" "MOONCAKE_CONFIG_PATH" "value" "/etc/mooncake/store.json")) }}
   {{- end }}
   {{- end }}
+  {{- /* The engine command runs under cache_manager.py (see the command forms
+       above); these tune the host-side slot pool it manages. The manager
+       reads them and drops them before the exec, so vLLM never sees them. */}}
+  {{- if $cacheEnabled }}
+  {{- $engineEnv = concat $engineEnv (list
+        (dict "name" "VLLM_CACHE_HOST_DIR" "value" "/var/cache/vllm-host")
+        (dict "name" "VLLM_CACHE_TEMPLATE_HASH" "value" (include "vllm.cacheTemplateHash" (dict "root" $root "role" $role "roleCfg" $roleCfg "pdRole" $pdRole)))
+        (dict "name" "VLLM_CACHE_MAX_SLOTS" "value" (printf "%v" ($cache.maxSlotsPerNode | default 8)))
+        (dict "name" "VLLM_CACHE_HISTORY_LIMIT" "value" (printf "%v" ($cache.historyLimit | default 2)))) }}
+  {{- end }}
   {{- if or $engineEnv $root.Values.env }}
   env:
   {{- include "vllm.mergeEnv" (dict "chart" $engineEnv "user" $root.Values.env "padding" 4) }}
@@ -488,11 +560,20 @@
   securityContext:
     {{- toYaml . | nindent 4 }}
   {{- end }}
-  {{- if or $hasModel $root.Values.volumeMounts $shmOn $l2 }}
+  {{- if or $hasModel $cacheEnabled $root.Values.volumeMounts $shmOn $l2 }}
   volumeMounts:
   {{- if $hasModel }}
   - name: model-storage
     mountPath: {{ $root.Values.model.mountPath }}
+    readOnly: true
+  {{- end }}
+  {{- if $cacheEnabled }}
+  # The hostPath below carries the slot pool the cache manager leases from
+  # (podSpec volumes); the configMap carries cache_manager.py itself.
+  - name: host-cache
+    mountPath: /var/cache/vllm-host
+  - name: cache-manager-script
+    mountPath: /opt/vllm-cache
     readOnly: true
   {{- end }}
   {{- if $shmOn }}
@@ -720,6 +801,8 @@
 {{- $serves := $e.serves }}
 {{- $hasModel := $e.hasModel }}
 {{- $l2 := $e.l2 }}
+{{- $cacheEnabled := $e.cacheEnabled }}
+{{- $cacheFullHostPath := $e.cacheFullHostPath }}
 {{- $preStop := $root.Values.lifecycle.preStop }}
 {{- /* Shutdown budget: preStop + vLLM finishing up after SIGTERM, checked by
        vllm.shutdownBudget. Workers get their own, because they drain nothing
@@ -820,7 +903,7 @@ containers:
        never makes it to podSpec (it renders merged from pd-colocate.yaml),
        so $multi and pd's A/B shape both still want hostNetwork when
        hostNetwork is set in values. */}}
-{{- if or $hasModel $hangVol $root.Values.volumes $shmOn $l2 }}
+{{- if or $hasModel $hangVol $cacheEnabled $root.Values.volumes $shmOn $l2 }}
 volumes:
 {{- if $shmOn }}
 - name: dshm
@@ -833,6 +916,16 @@ volumes:
   hostPath:
     path: {{ $root.Values.model.localPath }}
     type: {{ $root.Values.model.hostPathType }}
+{{- end }}
+{{- if $cacheEnabled }}
+- name: host-cache
+  hostPath:
+    path: {{ $cacheFullHostPath }}
+    type: DirectoryOrCreate
+- name: cache-manager-script
+  configMap:
+    name: {{ include "vllm.fullname" $root }}-cache-manager
+    defaultMode: 0755
 {{- end }}
 {{- if $hangVol }}
 - name: hang-watcher-config

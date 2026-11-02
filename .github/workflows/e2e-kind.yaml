@@ -1,0 +1,79 @@
+name: e2e-kind
+
+# Host compile cache of charts/sglang and charts/vllm on a CPU-only kind cluster.
+# See test/e2e/kind/README.md.
+on:
+  pull_request:
+    paths:
+      - "charts/sglang/**"
+      - "charts/vllm/**"
+      - "test/e2e/kind/**"
+      - "Makefile"
+      - ".github/workflows/e2e-kind.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-kind-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  e2e-kind:
+    name: e2e-kind (${{ matrix.chart }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        chart: [sglang, vllm]
+    env:
+      KIND_CLUSTER: cache-e2e
+      E2E_VERBOSE: "1"
+      E2E_CHART: ${{ matrix.chart }}
+      # Under the job timeout, so go test fails with its own output first.
+      E2E_TIMEOUT: 22m
+      KIND_VERSION: v0.33.0
+      # kind v0.33.0 linux-amd64, from
+      # https://kind.sigs.k8s.io/dl/v0.33.0/kind-linux-amd64.sha256sum
+      KIND_SHA256: aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: test/e2e/kind/go.mod
+          cache-dependency-path: test/e2e/kind/go.sum
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+
+      # file://../cart and continuation-gateway. --skip-refresh uses the tarballs
+      # already in the chart directory; nothing is downloaded.
+      - name: Resolve local chart dependencies
+        run: |
+          helm dependency build --skip-refresh charts/sglang
+          helm dependency build --skip-refresh charts/vllm
+
+      - name: Install kind
+        run: |
+          curl -fsSLo kind-linux-amd64 "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          echo "${KIND_SHA256}  kind-linux-amd64" | sha256sum -c
+          sudo install -m 0755 kind-linux-amd64 /usr/local/bin/kind
+          rm -f kind-linux-amd64
+          kind version
+
+      - name: e2e
+        run: make test-e2e-kind E2E_CHART=${{ matrix.chart }}
+
+      - name: Dump cluster on failure
+        if: failure()
+        run: |
+          ctx="kind-${KIND_CLUSTER}"
+          kubectl --context "$ctx" get pods -A -o wide || true
+          kubectl --context "$ctx" -n cache-e2e describe pods || true
+          kubectl --context "$ctx" -n cache-e2e get pods -o name | while read -r p; do
+            echo "===== logs ${p}"
+            kubectl --context "$ctx" -n cache-e2e logs "$p" --all-containers --tail=200 || true
+          done
+          docker exec "${KIND_CLUSTER}-control-plane" sh -c 'find /var/lib/e2e -maxdepth 6 -print | sort' || true

@@ -1,0 +1,93 @@
+# CPU-only kind install of charts/vllm with the host compile cache on.
+# The chart has no image.pullPolicy field. Tags other than "latest" make the
+# kubelet default to IfNotPresent; the suite loads those tags into the node.
+replicaCount: 2
+
+image:
+  repository: e2e-cache-engine
+  tag: a
+
+model:
+  name: e2e-mock
+  localPath: /var/lib/e2e/model
+  mountPath: /models
+  hostPathType: Directory
+  gpus: "0"
+
+modelCheck:
+  enabled: true
+  requiredGlobs:
+    - config.json
+
+# No commandOverride: that disables the cache wrapper. The pod runs
+# python3 /opt/vllm-cache/cache_manager.py -- vllm serve ...
+extraArgs: []
+
+cache:
+  enabled: true
+  hostPath: /var/lib/e2e/vllm-cache
+  hostPathSuffix: e2e
+  historyLimit: 2
+  maxSlotsPerNode: 2
+
+# CRDs and images a plain kind cluster does not have.
+scaler:
+  enabled: false
+sloRequirement:
+  enabled: false
+modelRoute:
+  enabled: false
+serviceMonitor:
+  enabled: false
+cart:
+  enabled: false
+hangWatcher:
+  enabled: false
+shm:
+  enabled: false
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 32Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# Short probes so a mock that answers immediately becomes Ready quickly.
+# The startup budget (40 x 2s) stays under progressDeadlineSeconds.
+startupProbe:
+  periodSeconds: 2
+  timeoutSeconds: 2
+  failureThreshold: 40
+readinessProbe:
+  periodSeconds: 2
+  timeoutSeconds: 2
+  failureThreshold: 3
+livenessProbe:
+  periodSeconds: 5
+  timeoutSeconds: 2
+  failureThreshold: 3
+
+progressDeadlineSeconds: 180
+
+# preStop reads /metrics and returns as soon as the mock reports idle.
+# The grace period has to clear endpointSync + drain + shutdownReserve.
+terminationGracePeriodSeconds: 45
+lifecycle:
+  preStop:
+    enabled: true
+    endpointSyncSeconds: 1
+    drainSeconds: 20
+    pollIntervalSeconds: 1
+  shutdownTimeout: 0
+  shutdownReserveSeconds: 5
+  preStopKill: true
+
+# maxUnavailable 0 keeps the previous template leased while a new pod starts,
+# which is what the GC spec observes.
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0

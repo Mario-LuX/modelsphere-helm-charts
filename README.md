@@ -75,6 +75,16 @@ With the CRD absent, enabling the feature fails the install with
 `no matches for kind ...`. The charts deliberately carry no copy of either
 schema, because the operator that reconciles it owns it.
 
+## End-to-end test on kind
+
+The host compile cache in `charts/sglang` and `charts/vllm` has a CPU-only kind
+suite. What it covers, and how to run one chart, is in
+[test/e2e/kind/README.md](test/e2e/kind/README.md).
+
+```sh
+make test-e2e-kind
+```
+
 ## Contributing
 
 Charts live under `charts/<name>/`. Bump the chart's `version` in `Chart.yaml`
