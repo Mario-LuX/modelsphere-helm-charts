@@ -17,7 +17,7 @@ DNS is `http://decision-gen.<namespace>.svc:80` for
 |---|---|
 | `decision-gen` Deployment/Service/SA | Stable recommendation endpoint |
 | `decision-gen-unstable` (optional) | Same image + `LOG_LEVEL=DEBUG`; off by default |
-| `slo-api` (optional) | **Leave disabled** — published `v0.1` still targets the old API group |
+| `slo-api` Deployment/Service/SA/Secret | HTTP API for editing SLO specs by route; on by default (`sloApi.enabled`) |
 | CRDs `LLMSLORequirement`, `JobSLORequirement` | Under `inference.modelsphere.dev`; annotated `helm.sh/resource-policy: keep` |
 
 This chart does **not** create or patch Namespace resources. Create the target
@@ -64,4 +64,4 @@ Upgrading from chart `<0.3.0` replaces the old bare `decision-gen` /
 | Component | Default image |
 |---|---|
 | decision-gen | `4pdosc/llm-scaler-decision-gen:0.8.0` (matches `appVersion`) |
-| slo-api | `4pdosc/llm-slo-api:v0.1` (incompatible with current CRDs — do not enable) |
+| slo-api | `4pdosc/llm-slo-api:0.3.0` |

@@ -78,14 +78,16 @@ decisionGen:
 #
 # The image must be 0.2.0 or newer: v0.1 looks for LLMSLORequirement under
 # inference.x-k8s.io only, and would find nothing on a cluster that has
-# migrated. 0.2.0 asks the API server which group it serves.
+# migrated. 0.2.0 asks the API server which group it serves. 0.3.0 adds
+# JobSLORequirement routes (granted in the ClusterRole), the pdengine bound
+# type and bound value 0, all of which this chart's CRDs allow.
 # ---------------------------------------------------------------------------
 sloApi:
   enabled: true
   replicas: 1
   image:
     repository: 4pdosc/llm-slo-api
-    tag: "0.2.0"
+    tag: "0.3.0"
     pullPolicy: IfNotPresent
   service:
     port: 80
