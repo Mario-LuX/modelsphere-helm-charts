@@ -87,6 +87,21 @@ desiredReplicas:
     - apiGroup: leaderworkerset.x-k8s.io
       resources: [ "leaderworkersets" ]
 
+# Per-role replica series for prefill/decode-disaggregated services. The replica
+# gauges always carry a role label; with this on, a DisaggregatedSet release
+# reports role="prefill" and role="decode" beside the role="router" counts its
+# discovery Service yields, with one engine per LeaderWorkerSet group.
+#
+# It costs one extra list call per refresh and `list` on leaderworkersets in the
+# ClusterRole. Off, the exporter is told so (PD_ROLE_GROUP="") and stops asking
+# altogether rather than probing an API it is no longer granted; only the
+# per-role series go away. Harmless on a cluster that has no DisaggregatedSet,
+# which simply has no such LeaderWorkerSets.
+pdRoles:
+  enabled: true
+  apiGroup: leaderworkerset.x-k8s.io
+  version: v1
+
 # Scrape configuration for a cluster running the Prometheus operator.
 serviceMonitor:
   enabled: true

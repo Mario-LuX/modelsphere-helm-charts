@@ -69,6 +69,11 @@ spec:
             - { name: MODELROUTE_PLURAL,                value: "{{ .Values.routeDiscovery.plural }}" }
             - { name: ROUTE_DISCOVERY_INTERVAL_SECONDS, value: "{{ .Values.routeDiscovery.intervalSeconds }}" }
             - { name: OPENRESTY_SERVICE,                value: "{{ .Values.routeDiscovery.openrestyService }}" }
+            # An empty group switches the per-role series off in the exporter: with
+            # pdRoles disabled it must not keep probing an API the ClusterRole above
+            # no longer grants it.
+            - { name: PD_ROLE_GROUP,                    value: "{{ if .Values.pdRoles.enabled }}{{ .Values.pdRoles.apiGroup }}{{ end }}" }
+            - { name: PD_ROLE_VERSION,                  value: "{{ .Values.pdRoles.version }}" }
             {{- end }}
             {{- end }}
           ports:
