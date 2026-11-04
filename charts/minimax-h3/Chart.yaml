@@ -6,5 +6,5 @@ sources:
   - https://github.com/modelsphere/minimax-h3-server
   - https://github.com/modelsphere/helm-charts
 type: application
-version: 0.2.0
-appVersion: "0.2.0"
+version: 0.2.2
+appVersion: "0.2.2"
