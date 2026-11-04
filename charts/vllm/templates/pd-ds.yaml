@@ -215,7 +215,7 @@ spec:
              loop just blocks until the full set shows up. */}}
       initContainers:
       - name: wait-upstreams
-        image: "{{ include "vllm.pdRouterImage" $root }}"
+        image: "{{ include "vllm.pdWaitUpstreamsImage" $root }}"
         command: ["bash", "-lc"]
         args:
         - |

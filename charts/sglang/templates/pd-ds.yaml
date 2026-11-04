@@ -181,7 +181,7 @@ spec:
              loop just blocks until the full set shows up. */}}
       initContainers:
       - name: wait-upstreams
-        image: "{{ include "sglang.pdRouterImage" $root }}"
+        image: "{{ include "sglang.pdWaitUpstreamsImage" $root }}"
         command: ["bash", "-lc"]
         args:
         - |

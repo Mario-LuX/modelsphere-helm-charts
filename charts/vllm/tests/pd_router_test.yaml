@@ -18,7 +18,7 @@ set:
   pd.decode.gpus: 8
   model.localPath: /models/x
 tests:
-  - it: pd-ds router and its init container default to the pinned vllm-router image
+  - it: pd-ds router defaults to the pinned vllm-router image; its init container to debian
     template: templates/pd-ds.yaml
     documentSelector:
       path: metadata.name
@@ -29,7 +29,7 @@ tests:
           value: vllm/vllm-router:v0.1.16.1
       - equal:
           path: spec.template.spec.initContainers[?(@.name == "wait-upstreams")].image
-          value: vllm/vllm-router:v0.1.16.1
+          value: debian:12-slim
 
   - it: pd-ds router execs vllm-router and keeps its state dir where non-root can write
     template: templates/pd-ds.yaml
@@ -60,7 +60,7 @@ tests:
           path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
           pattern: 'file="/tmp/pd-router/\$3"'
 
-  - it: pd-ds override wins over the default
+  - it: pd-ds router override wins over the default and leaves the init container alone
     template: templates/pd-ds.yaml
     documentSelector:
       path: metadata.name
@@ -72,6 +72,9 @@ tests:
       - equal:
           path: spec.template.spec.containers[?(@.name == "router")].image
           value: registry.example.com/mirror/vllm-router:v0.1.17
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "wait-upstreams")].image
+          value: debian:12-slim
 
   - it: colocate router runs vllm-router while its engines stay on the engine image
     template: templates/pd-colocate.yaml
@@ -108,7 +111,7 @@ tests:
           value: vllm/vllm-router:v0.1.16.1
       - equal:
           path: spec.template.spec.initContainers[?(@.name == "wait-upstreams")].image
-          value: vllm/vllm-router:v0.1.16.1
+          value: debian:12-slim
 
   - it: colocate emptied override falls back to vllm-router, not the engine image
     template: templates/pd-colocate.yaml
@@ -123,3 +126,32 @@ tests:
       - equal:
           path: spec.template.spec.containers[?(@.name == "router")].image
           value: vllm/vllm-router:v0.1.16.1
+
+  - it: wait-upstreams image can be mirrored without touching the router
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    set:
+      pd.router.waitUpstreamsImage.repository: registry.example.com/mirror/debian
+      pd.router.waitUpstreamsImage.tag: 12-slim-pinned
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "wait-upstreams")].image
+          value: registry.example.com/mirror/debian:12-slim-pinned
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "router")].image
+          value: vllm/vllm-router:v0.1.16.1
+
+  - it: emptied wait-upstreams image falls back to debian
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    set:
+      pd.router.waitUpstreamsImage.repository: ""
+      pd.router.waitUpstreamsImage.tag: ""
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "wait-upstreams")].image
+          value: debian:12-slim

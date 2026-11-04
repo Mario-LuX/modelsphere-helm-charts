@@ -231,6 +231,15 @@
                 "tag": { "type": "string" }
               }
             },
+            "waitUpstreamsImage": {
+              "description": "Image of the router's wait-upstreams init container. Needs bash, getent, awk, sort, wc and sleep. Independent of imageOverride.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "repository": { "type": "string" },
+                "tag": { "type": "string" }
+              }
+            },
             "affinityReplace": { "type": ["object", "null"] },
             "tolerationsReplace": { "type": ["array", "null"] }
           }

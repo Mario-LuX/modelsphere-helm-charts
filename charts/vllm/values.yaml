@@ -312,6 +312,11 @@ pd:
     imageOverride:
       repository: "vllm/vllm-router"
       tag: "v0.1.16.1"
+    # The wait-upstreams init container only resolves DNS, so it stays on a
+    # plain base image whatever the router runs. Set repository/tag to mirror it.
+    waitUpstreamsImage:
+      repository: "debian"
+      tag: "12-slim"
     # The router always gets a copy of the model mounted read-only at
     # model.mountPath (used by the tokenizer's HF lookup). Its default
     # scheduling is pinned: required podAffinity to THIS slice's prefill

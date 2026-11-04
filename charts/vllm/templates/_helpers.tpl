@@ -301,3 +301,11 @@
 {{- $img := .Values.pd.router.imageOverride | default dict -}}
 {{ $img.repository | default "vllm/vllm-router" }}:{{ $img.tag | default "v0.1.16.1" }}
 {{- end -}}
+
+{{/*
+  The PD router's wait-upstreams init container image. Takes the root context.
+*/}}
+{{- define "vllm.pdWaitUpstreamsImage" -}}
+{{- $img := .Values.pd.router.waitUpstreamsImage | default dict -}}
+{{ $img.repository | default "debian" }}:{{ $img.tag | default "12-slim" }}
+{{- end -}}

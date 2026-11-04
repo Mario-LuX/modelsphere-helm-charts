@@ -280,3 +280,11 @@
 {{- $img := .Values.pd.router.imageOverride | default dict -}}
 {{ $img.repository | default "lightseekorg/smg" }}:{{ $img.tag | default "1.14.0" }}
 {{- end -}}
+
+{{/*
+  The PD router's wait-upstreams init container image. Takes the root context.
+*/}}
+{{- define "sglang.pdWaitUpstreamsImage" -}}
+{{- $img := .Values.pd.router.waitUpstreamsImage | default dict -}}
+{{ $img.repository | default "debian" }}:{{ $img.tag | default "12-slim" }}
+{{- end -}}
