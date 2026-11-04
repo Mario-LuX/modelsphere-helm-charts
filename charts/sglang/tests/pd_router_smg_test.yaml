@@ -1,0 +1,127 @@
+# The PD router runs `smg launch` off its own image, in both PD shapes. The engine
+# image has no smg, so an emptied override falls back to smg, never to the engine.
+#
+# The boot script and the drift liveness probe share a state dir. A mismatch is
+# silent, because the probe treats a missing snapshot as "still booting" and
+# passes, so drift detection would just stop working. Hence the path asserts on both.
+suite: pd router runs smg
+release:
+  name: ci
+  namespace: ci
+set:
+  modelRoute.nginx.outputConfigMap: ci/openresty-conf
+  pd.enabled: true
+  rdma.enabled: true
+  scaler.enabled: false
+  pd.prefill.gpus: 8
+  pd.decode.gpus: 8
+  model.localPath: /models/x
+tests:
+  - it: pd-ds router and its init container default to the pinned smg image
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "router")].image
+          value: lightseekorg/smg:1.14.0
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "wait-upstreams")].image
+          value: lightseekorg/smg:1.14.0
+
+  - it: pd-ds router execs smg and keeps its state dir where non-root can write
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: 'exec smg launch \\\n\s+--pd-disaggregation'
+      - notMatchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: 'sglang_router|/run/pd-router'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: 'mkdir -p /tmp/pd-router'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: 'mv "\$T" "/tmp/pd-router/\$\{role\}-ips"'
+
+  - it: pd-ds liveness probe reads the state dir the boot script writes
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
+          pattern: 'file="/tmp/pd-router/\$3"'
+
+  - it: pd-ds override wins over the default
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    set:
+      pd.router.imageOverride.repository: registry.example.com/mirror/smg
+      pd.router.imageOverride.tag: "1.14.1"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "router")].image
+          value: registry.example.com/mirror/smg:1.14.1
+
+  - it: colocate router runs smg while its engines stay on the engine image
+    template: templates/pd-colocate.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      pd.colocate: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "router")].image
+          value: lightseekorg/smg:1.14.0
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: 'exec smg launch \\\n\s+--pd-disaggregation'
+      - notMatchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: 'sglang_router'
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "sglang")].image
+          value: lmsysorg/sglang:latest
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "sglang1")].image
+          value: lmsysorg/sglang:latest
+
+  - it: pd-ds emptied override falls back to smg, not the engine image
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    set:
+      pd.router.imageOverride.repository: ""
+      pd.router.imageOverride.tag: ""
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "router")].image
+          value: lightseekorg/smg:1.14.0
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "wait-upstreams")].image
+          value: lightseekorg/smg:1.14.0
+
+  - it: colocate emptied override falls back to smg, not the engine image
+    template: templates/pd-colocate.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      pd.colocate: true
+      pd.router.imageOverride.repository: ""
+      pd.router.imageOverride.tag: ""
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "router")].image
+          value: lightseekorg/smg:1.14.0

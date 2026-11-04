@@ -115,13 +115,12 @@ spec:
       # handed to --prefill explicitly, exactly as in pd-ds.yaml, never let to
       # smg's default (which would trap the decode side onto its own port).
       - name: router
-        {{- $img := $pd.router.imageOverride | default dict }}
-        image: "{{ $img.repository | default $root.Values.image.repository }}:{{ $img.tag | default $root.Values.image.tag }}"
+        image: "{{ include "sglang.pdRouterImage" $root }}"
         command: ["bash", "-lc"]
         args:
         - |
           set -e
-          exec python3 -m sglang_router.launch_router \
+          exec smg launch \
             --pd-disaggregation \
             --prefill http://127.0.0.1:{{ $pd.prefill.httpPort | default 30001 }} {{ $pd.prefill.bootstrapPort | default 8998 }} \
             --decode http://127.0.0.1:{{ $pd.decode.httpPort | default 30002 }} \

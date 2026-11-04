@@ -123,8 +123,7 @@ spec:
       # back from the engine itself, so no bootstrap port needs to cross the
       # router's CLI.
       - name: router
-        {{- $img := $pd.router.imageOverride | default dict }}
-        image: "{{ $img.repository | default "vllm/vllm-router" }}:{{ $img.tag | default "v0.1.16.1" }}"
+        image: "{{ include "vllm.pdRouterImage" $root }}"
         command: ["bash", "-lc"]
         args:
         - |

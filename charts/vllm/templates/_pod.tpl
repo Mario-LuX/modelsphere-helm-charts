@@ -1101,7 +1101,7 @@ exit 0
 {{- /* Liveness probe for the DisaggregatedSet router -- detects upstream-set
        drift. Strategy: restart on GROWTH only. getent re-resolves the slice
        headless Service on every tick; any IP it returns that was not baked
-       into router argv at boot (recorded in /run/pd-router/<role>-ips by
+       into router argv at boot (recorded in /tmp/pd-router/<role>-ips by
        the boot script) means a new upstream appeared and the running router
        can never learn about it. Shrinkage is intentionally silent -- the
        router's own health checker already quarantines dead URLs, and
@@ -1162,7 +1162,7 @@ except Exception:
 PY
 }
 check() {
-  local role=$1 svc=$2 file="/run/pd-router/$3" port=$4
+  local role=$1 svc=$2 file="/tmp/pd-router/$3" port=$4
   [ -f "$file" ] || return 0
   local ip
   while read -r ip; do

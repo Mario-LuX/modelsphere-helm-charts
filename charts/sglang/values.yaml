@@ -228,17 +228,16 @@ pd:
   router:
     # A/B only. In colocate there is exactly one router CONTAINER per
     # merged pod; this replicas is the per-slice router Deployment count
-    # (1, capped at 2 -- this image's sglang-router has no HA).
+    # (1, capped at 2 -- the router has no HA).
     replicas: 1
     # Forwarded verbatim as --policy.
     policy: cache_aware
-    # Default: the engine image (which ships sglang_router). Set
-    # imageOverride.repository / .tag to run the router off a different
-    # build. The merged pod in colocate uses the same image for its router
-    # CONTAINER and for both engines unless this says otherwise.
+    # smg is a SEPARATE image from the sglang engine image. The default below
+    # is a real published image. Set repository/tag to mirror a private build,
+    # and set both: a field left out keeps its default below.
     imageOverride:
-      repository: ""
-      tag: ""
+      repository: "lightseekorg/smg"
+      tag: "1.14.0"
     # The router always gets a copy of the model mounted read-only at
     # model.mountPath (as /model for the tokenizer's HF lookup, the path
     # cache_aware's prefix-hashing needs). Its default scheduling is

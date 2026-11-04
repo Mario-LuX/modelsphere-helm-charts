@@ -272,3 +272,11 @@
 {{ toYaml $out | nindent $padding | trimSuffix "\n" }}
 {{- end -}}
 {{- end -}}
+
+{{/*
+  The PD router's image. Takes the root context.
+*/}}
+{{- define "sglang.pdRouterImage" -}}
+{{- $img := .Values.pd.router.imageOverride | default dict -}}
+{{ $img.repository | default "lightseekorg/smg" }}:{{ $img.tag | default "1.14.0" }}
+{{- end -}}

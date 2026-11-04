@@ -215,8 +215,7 @@ spec:
              loop just blocks until the full set shows up. */}}
       initContainers:
       - name: wait-upstreams
-        {{- $img := $pd.router.imageOverride | default dict }}
-        image: "{{ $img.repository | default "vllm/vllm-router" }}:{{ $img.tag | default "v0.1.16.1" }}"
+        image: "{{ include "vllm.pdRouterImage" $root }}"
         command: ["bash", "-lc"]
         args:
         - |
@@ -236,7 +235,7 @@ spec:
           done
       containers:
       - name: router
-        image: "{{ $img.repository | default "vllm/vllm-router" }}:{{ $img.tag | default "v0.1.16.1" }}"
+        image: "{{ include "vllm.pdRouterImage" $root }}"
         command: ["bash", "-lc"]
         args:
         - |
@@ -364,16 +363,16 @@ spec:
               sleep 10; waited=$((waited+10))
             done
           }
-          install -d -m 0755 /run/pd-router
+          mkdir -p /tmp/pd-router            # /run is root-owned; /tmp works whichever uid the router image runs as
           write_role_snapshot() {
             local role=$1 ips=$2
-            local T=$(mktemp -p /run/pd-router)
+            local T=$(mktemp -p /tmp/pd-router)
             local ip id
             for ip in $ips; do
               id=$(probe_identity "$ip")
               printf '%s|%s\n' "$ip" "$id" >>"$T"
             done
-            mv "$T" "/run/pd-router/${role}-ips"
+            mv "$T" "/tmp/pd-router/${role}-ips"
           }
           write_role_snapshot prefill "$PF_IPS"
           write_role_snapshot decode  "$DC_IPS"

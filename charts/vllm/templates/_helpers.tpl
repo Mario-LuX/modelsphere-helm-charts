@@ -293,3 +293,11 @@
 {{ toYaml $out | nindent $padding | trimSuffix "\n" }}
 {{- end -}}
 {{- end -}}
+
+{{/*
+  The PD router's image. Takes the root context.
+*/}}
+{{- define "vllm.pdRouterImage" -}}
+{{- $img := .Values.pd.router.imageOverride | default dict -}}
+{{ $img.repository | default "vllm/vllm-router" }}:{{ $img.tag | default "v0.1.16.1" }}
+{{- end -}}

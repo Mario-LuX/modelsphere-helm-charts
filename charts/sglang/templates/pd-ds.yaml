@@ -181,8 +181,7 @@ spec:
              loop just blocks until the full set shows up. */}}
       initContainers:
       - name: wait-upstreams
-        {{- $img := $pd.router.imageOverride | default dict }}
-        image: "{{ $img.repository | default $root.Values.image.repository }}:{{ $img.tag | default $root.Values.image.tag }}"
+        image: "{{ include "sglang.pdRouterImage" $root }}"
         command: ["bash", "-lc"]
         args:
         - |
@@ -202,7 +201,7 @@ spec:
           done
       containers:
       - name: router
-        image: "{{ $img.repository | default $root.Values.image.repository }}:{{ $img.tag | default $root.Values.image.tag }}"
+        image: "{{ include "sglang.pdRouterImage" $root }}"
         command: ["bash", "-lc"]
         args:
         - |
@@ -246,7 +245,7 @@ spec:
           #
           # Each line is "<ip>|<restarts>|<watcher_started_at>" from the
           # engine pod's hang-watcher /engine endpoint. The ip alone isn't a
-          # stable identity: sglang-router pins bootstrap info at boot on
+          # stable identity: the router pins bootstrap info at boot on
           # TOP of the IP, so an engine that crashes and is restarted in place
           # by the kubelet keeps its IP but swaps engine_id -- the router's
           # transfer sessions then point at a dead incarnation while DNS
@@ -358,16 +357,16 @@ spec:
           }
           echo "router: slice {{ $s }} resolved prefill: ${PF_IPS:-none}" >&2
           echo "router: slice {{ $s }} resolved decode:  ${DC_IPS:-none}" >&2
-          install -d -m 0755 /run/pd-router
+          mkdir -p /tmp/pd-router            # smg image has USER smg (uid 65532); /run is root-owned
           write_role_snapshot() {
             # usage: write_role_snapshot <role> <hl-fqdn> <ips>
             #
-            # Writes /run/pd-router/<role>-ips and echoes the kept IPs on
+            # Writes /tmp/pd-router/<role>-ips and echoes the kept IPs on
             # stdout so the caller can capture the filtered list for argv.
             # IPs whose probe_identity returns 3 (no longer in DNS) are
             # excluded from both.
             local role=$1 fqdn=$2 ips=$3
-            local T=$(mktemp -p /run/pd-router)
+            local T=$(mktemp -p /tmp/pd-router)
             local ip id kept=""
             for ip in $ips; do
               if id=$(probe_identity "$ip" "$fqdn"); then
@@ -375,7 +374,7 @@ spec:
                 kept="$kept $ip"
               fi
             done
-            mv "$T" "/run/pd-router/${role}-ips"
+            mv "$T" "/tmp/pd-router/${role}-ips"
             echo "${kept# }"
           }
           PF_KEPT=$(write_role_snapshot prefill "$PF_HL" "$PF_IPS")
@@ -394,7 +393,7 @@ spec:
           echo "router: decode $DC_ARGS"
           echo "router: boot script done, exec into router" >&2
           # shellcheck disable=SC2086
-          exec python3 -m sglang_router.launch_router \
+          exec smg launch \
             --pd-disaggregation \
             $PF_ARGS $DC_ARGS \
             --policy {{ $pd.router.policy | default "cache_aware" }} \
