@@ -470,10 +470,16 @@ model:
   # model's own. Only set it when you really mean to cap the context. Same key
   # as the sglang chart; the old name model.maxLen is still read.
   contextLength: ""
-  # Empty or "0" leaves nvidia.com/gpu off the pod entirely rather than
-  # requesting zero of it: the two schedule alike, but device plugins, GPU
-  # webhooks and quota all key off the key being there.
+  # Empty or "0" leaves the resource named by gpuResource off the pod entirely
+  # rather than requesting zero of it: the two schedule alike, but device
+  # plugins, GPU webhooks and quota all key off the key being there.
   gpus: "1"
+  # The resource name model.gpus (and pd.<role>.gpus) is rendered under.
+  # Must be domain-prefixed (<dns-subdomain>/<name>); built-in names such as
+  # cpu or memory are rejected by the schema.
+  # Default nvidia.com/gpu. An Ascend node is volcano.sh/Ascend910B4-1
+  # (or huawei.com/Ascend910).
+  gpuResource: "nvidia.com/gpu"
 
 # Init container that checks the mounted model directory before the engine gets
 # a chance to start. hostPathType: Directory already catches a missing path; this
@@ -1299,8 +1305,9 @@ volumeMounts: []
   #   mountPath: /dev/shm
 
 # CPU, memory and ephemeral-storage for the engine container. Merged with the
-# GPU limit, which stays derived from model.gpus -- naming nvidia.com/gpu here
-# is refused at render time, so only one place ever says how many GPUs.
+# GPU limit, which stays derived from model.gpus -- naming model.gpuResource
+# (default nvidia.com/gpu) here is refused at render time, so only one place
+# ever says how many GPUs.
 #
 # ephemeral-storage is the one worth setting deliberately. It covers the
 # container's writable layer, its logs, and every non-memory-backed emptyDir --

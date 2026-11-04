@@ -1,0 +1,282 @@
+# model.gpuResource is the extended-resource name model.gpus / pd.<role>.gpus
+# is rendered under. Default nvidia.com/gpu, so a stock render is unchanged.
+# Tolerations do not follow it: the auto-added toleration stays nvidia.com/gpu.
+suite: gpu resource name
+release:
+  name: ci
+set:
+  modelRoute.nginx.outputConfigMap: ci/openresty-conf
+tests:
+  - it: default renders nvidia.com/gpu limit and toleration
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "vllm")].resources
+          value:
+            limits:
+              nvidia.com/gpu: "1"
+      - equal:
+          path: spec.template.spec.tolerations
+          value:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+
+  - it: a custom gpuResource is the limit; the toleration stays nvidia.com/gpu
+    template: templates/deployment.yaml
+    set:
+      model.gpuResource: volcano.sh/Ascend910B4-1
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "vllm")].resources
+          value:
+            limits:
+              volcano.sh/Ascend910B4-1: "1"
+      - notExists:
+          path: spec.template.spec.containers[?(@.name == "vllm")].resources.limits["nvidia.com/gpu"]
+      - equal:
+          path: spec.template.spec.tolerations
+          value:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+
+  - it: gpus 0 omits the configured resource; the toleration stays nvidia.com/gpu
+    template: templates/deployment.yaml
+    set:
+      model.gpus: "0"
+      model.gpuResource: volcano.sh/Ascend910B4-1
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[?(@.name == "vllm")].resources
+      - equal:
+          path: spec.template.spec.tolerations
+          value:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+
+  - it: refuses the configured resource under resources.limits
+    template: templates/deployment.yaml
+    set:
+      model.gpuResource: volcano.sh/Ascend910B4-1
+      resources:
+        limits:
+          volcano.sh/Ascend910B4-1: "2"
+    asserts:
+      - failedTemplate:
+          errorPattern: "resources.limits -- model.gpus is what renders volcano.sh/Ascend910B4-1"
+
+  - it: refuses the configured resource under resources.requests
+    template: templates/deployment.yaml
+    set:
+      model.gpuResource: volcano.sh/Ascend910B4-1
+      resources:
+        requests:
+          volcano.sh/Ascend910B4-1: "2"
+    asserts:
+      - failedTemplate:
+          errorPattern: "resources.requests -- model.gpus is what renders volcano.sh/Ascend910B4-1"
+
+  - it: nvidia.com/gpu under resources passes through when gpuResource is custom
+    template: templates/deployment.yaml
+    set:
+      model.gpuResource: volcano.sh/Ascend910B4-1
+      resources:
+        limits:
+          nvidia.com/gpu: "2"
+        requests:
+          nvidia.com/gpu: "2"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "vllm")].resources
+          value:
+            limits:
+              nvidia.com/gpu: "2"
+              volcano.sh/Ascend910B4-1: "1"
+            requests:
+              nvidia.com/gpu: "2"
+
+  - it: schema rejects an empty gpuResource
+    template: templates/deployment.yaml
+    set:
+      model.gpuResource: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpuResource"
+
+  - it: schema rejects an invalid gpuResource
+    template: templates/deployment.yaml
+    set:
+      model.gpuResource: "NOT A RESOURCE"
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpuResource"
+
+  - it: schema rejects unprefixed gpuResource cpu
+    template: templates/deployment.yaml
+    set:
+      model.gpuResource: cpu
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpuResource"
+
+  - it: schema rejects unprefixed gpuResource memory
+    template: templates/deployment.yaml
+    set:
+      model.gpuResource: memory
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpuResource"
+
+  - it: lws renders the custom limit on leader and worker
+    template: templates/lws.yaml
+    documentSelector:
+      path: kind
+      value: LeaderWorkerSet
+    set:
+      lws.enabled: true
+      lws.size: 2
+      model.gpus: "8"
+      model.gpuResource: volcano.sh/Ascend910B4-1
+    asserts:
+      - equal:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].resources.limits["volcano.sh/Ascend910B4-1"]
+          value: "8"
+      - notExists:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].resources.limits["nvidia.com/gpu"]
+      - equal:
+          path: spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].resources.limits["volcano.sh/Ascend910B4-1"]
+          value: "8"
+      - notExists:
+          path: spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].resources.limits["nvidia.com/gpu"]
+      - equal:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.tolerations
+          value:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+      - equal:
+          path: spec.leaderWorkerTemplate.workerTemplate.spec.tolerations
+          value:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+
+  - it: pd A/B renders the custom key per role
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: kind
+      value: DisaggregatedSet
+    set:
+      pd.enabled: true
+      scaler.enabled: false
+      rdma.enabled: true
+      model.gpus: "4"
+      model.gpuResource: volcano.sh/Ascend910B4-1
+      pd.prefill.gpus: "2"
+      pd.decode.gpus: "3"
+    asserts:
+      - equal:
+          path: spec.roles[?(@.name == "prefill")].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].resources.limits["volcano.sh/Ascend910B4-1"]
+          value: "2"
+      - notExists:
+          path: spec.roles[?(@.name == "prefill")].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].resources.limits["nvidia.com/gpu"]
+      - equal:
+          path: spec.roles[?(@.name == "decode")].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].resources.limits["volcano.sh/Ascend910B4-1"]
+          value: "3"
+      - notExists:
+          path: spec.roles[?(@.name == "decode")].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].resources.limits["nvidia.com/gpu"]
+      - equal:
+          path: spec.roles[?(@.name == "prefill")].spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].resources.limits["volcano.sh/Ascend910B4-1"]
+          value: "2"
+      - equal:
+          path: spec.roles[?(@.name == "decode")].spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].resources.limits["volcano.sh/Ascend910B4-1"]
+          value: "3"
+      - contains:
+          path: spec.roles[?(@.name == "prefill")].spec.leaderWorkerTemplate.leaderTemplate.spec.tolerations
+          content:
+            key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+      - contains:
+          path: spec.roles[?(@.name == "decode")].spec.leaderWorkerTemplate.leaderTemplate.spec.tolerations
+          content:
+            key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+
+  - it: pd router toleration stays nvidia.com/gpu with a custom gpuResource
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      pd.enabled: true
+      scaler.enabled: false
+      rdma.enabled: true
+      model.gpuResource: volcano.sh/Ascend910B4-1
+      pd.prefill.gpus: "2"
+      pd.decode.gpus: "3"
+    asserts:
+      - contains:
+          path: spec.template.spec.tolerations
+          content:
+            key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+      - notContains:
+          path: spec.template.spec.tolerations
+          content:
+            key: volcano.sh/Ascend910B4-1
+            operator: Exists
+            effect: NoSchedule
+
+  - it: pd colocate renders the custom key per engine
+    template: templates/pd-colocate.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      pd.enabled: true
+      pd.colocate: true
+      scaler.enabled: false
+      rdma.enabled: true
+      model.gpus: "2"
+      model.gpuResource: volcano.sh/Ascend910B4-1
+      pd.prefill.gpus: "1"
+      pd.decode.gpus: "3"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "vllm")].resources.limits["volcano.sh/Ascend910B4-1"]
+          value: "1"
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "vllm1")].resources.limits["volcano.sh/Ascend910B4-1"]
+          value: "3"
+      - notExists:
+          path: spec.template.spec.containers[?(@.name == "vllm")].resources.limits["nvidia.com/gpu"]
+      - notExists:
+          path: spec.template.spec.containers[?(@.name == "vllm1")].resources.limits["nvidia.com/gpu"]
+      - equal:
+          path: spec.template.spec.tolerations
+          value:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+
+  - it: mooncake master toleration stays nvidia.com/gpu with a custom gpuResource
+    template: templates/mc-master.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      localKVOffload.enabled: true
+      localKVOffload.backend: mooncakeStore
+      model.gpuResource: volcano.sh/Ascend910B4-1
+    asserts:
+      - equal:
+          path: spec.template.spec.tolerations
+          value:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule

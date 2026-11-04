@@ -596,17 +596,19 @@
          GPUs" would only drift, so naming it under resources is refused
          rather than silently ignored.
 
-         nvidia.com/gpu is an extended resource: it belongs in limits
-         only, and the kubelet sets the request equal to it. Empty or 0
-         leaves the key out altogether rather than asking for zero of it.
+         model.gpuResource (default nvidia.com/gpu) is an extended resource:
+         it belongs in limits only, and the kubelet sets the request equal
+         to it. Empty or 0 leaves the key out altogether rather than asking
+         for zero of it.
 
          Under lws.enabled this is per POD: a group holds lws.size x
          model.gpus GPUs. Under pd A/B it is per pod of the role's group,
          so a role with size: 2 + gpus: 8 is 16 GPUs across 2 pods. */}}
+  {{- $gpuRes := include "vllm.gpuResource" $root }}
   {{- $res := $root.Values.resources | default dict }}
   {{- range $section := list "limits" "requests" }}
-  {{- if hasKey (index $res $section | default dict) "nvidia.com/gpu" }}
-  {{- fail (printf "vllm: set the GPU count with model.gpus, not resources.%s -- model.gpus is what renders nvidia.com/gpu and what the rest of the chart refers to" $section) }}
+  {{- if hasKey (index $res $section | default dict) $gpuRes }}
+  {{- fail (printf "vllm: set the GPU count with model.gpus, not resources.%s -- model.gpus is what renders %s and what the rest of the chart refers to" $section $gpuRes) }}
   {{- end }}
   {{- end }}
   {{- $gpus := toString ($root.Values.model.gpus | default "") }}
@@ -620,7 +622,7 @@
   {{- $gpus = toString $roleCfg.gpus }}
   {{- end }}
   {{- if not (or (eq $gpus "") (eq $gpus "0")) }}
-  {{- $res = mergeOverwrite (deepCopy $res) (dict "limits" (dict "nvidia.com/gpu" $gpus)) }}
+  {{- $res = mergeOverwrite (deepCopy $res) (dict "limits" (dict $gpuRes $gpus)) }}
   {{- end }}
   {{- /* rdma.enabled adds one RDMA device from the shared-device plugin
          (rdma/hca_shared), unless resources already asks for it -- the user's

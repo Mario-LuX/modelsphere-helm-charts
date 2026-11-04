@@ -431,10 +431,16 @@ model:
   # Empty (the default) omits --context-length, so SGLang uses the model's own.
   # Only set it when you really mean to cap the context.
   contextLength: ""
-  # Empty or "0" leaves nvidia.com/gpu off the pod entirely rather than
-  # requesting zero of it: the two schedule alike, but device plugins, GPU
-  # webhooks and quota all key off the key being there.
+  # Empty or "0" leaves the resource named by gpuResource off the pod entirely
+  # rather than requesting zero of it: the two schedule alike, but device
+  # plugins, GPU webhooks and quota all key off the key being there.
   gpus: "1"
+  # The resource name model.gpus (and pd.<role>.gpus) is rendered under.
+  # Must be domain-prefixed (<dns-subdomain>/<name>); built-in names such as
+  # cpu or memory are rejected by the schema.
+  # Default nvidia.com/gpu. An Ascend node is volcano.sh/Ascend910B4-1
+  # (or huawei.com/Ascend910).
+  gpuResource: "nvidia.com/gpu"
 
 # Init container that checks the mounted model directory before the engine gets
 # a chance to start. hostPathType: Directory already catches a missing path; this
@@ -1238,11 +1244,11 @@ volumeMounts: []
   # - name: shm
   #   mountPath: /dev/shm
 
-# Do not set nvidia.com/gpu here -- model.gpus renders it, and the chart refuses
-# a second spelling rather than let the two drift. Other extended resources do
-# belong here, e.g. an RDMA device from the shared-device plugin -- though for
-# RDMA as a whole, rdma.enabled below (lws.enabled pods only)
-# sets this, IPC_LOCK and the injector label together:
+# Do not set model.gpuResource (default nvidia.com/gpu) here -- model.gpus
+# renders it, and the chart refuses a second spelling rather than let the two
+# drift. Other extended resources do belong here, e.g. an RDMA device from the
+# shared-device plugin -- though for RDMA as a whole, rdma.enabled below
+# (lws.enabled pods only) sets this, IPC_LOCK and the injector label together:
 #
 #   limits: { rdma/hca_shared: "1" }
 resources: {}

@@ -408,8 +408,14 @@
           "type": ["string", "integer"]
         },
         "gpus": {
-          "description": "Quoted in values.yaml. PER POD, not per LWS group. Empty or 0 omits nvidia.com/gpu from the pod entirely rather than requesting zero of it.",
+          "description": "Quoted in values.yaml. PER POD, not per LWS group. Empty or 0 omits the resource named by gpuResource from the pod entirely rather than requesting zero of it.",
           "type": ["string", "integer"]
+        },
+        "gpuResource": {
+          "description": "Extended-resource name model.gpus and pd.<role>.gpus are rendered under. Must be domain-prefixed (<dns-subdomain>/<name>); built-in names like cpu or memory are rejected. Default nvidia.com/gpu. An Ascend node is volcano.sh/Ascend910B4-1.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"
         }
       }
     },
