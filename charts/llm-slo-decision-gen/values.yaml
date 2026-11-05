@@ -20,7 +20,11 @@ decisionGen:
     ## 0.8.0 adds DisaggregatedSet placements and pdengine-typed bounds
     ## (inert until bodylog exports per-role replicas_ready), and drops a
     ## service from /decisions when its CR loses maximumDeployment.
-    tag: "0.8.0"
+    ## 0.8.1 is needed before bodylog-exporter 0.2.13, whose role label breaks
+    ## the replica count older tags read for a PD release. It also books a
+    ## workload with no GPU pin against the largest pool, not always H100; set
+    ## DEFAULT_GPU_POOL in decisionGen.env to keep a fixed pool.
+    tag: "0.8.1"
     pullPolicy: IfNotPresent
   service:
     port: 80

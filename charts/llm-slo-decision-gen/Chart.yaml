@@ -17,8 +17,8 @@ description: |
   separate chart (llmscaleoperator / llmscaleoperator-system). Deploy
   that one first if you need autoscaling, not just SLO storage.
 type: application
-version: 0.3.8
-# Matches decisionGen.image.tag (4pdosc/llm-scaler-decision-gen:0.8.0), the
-# first release that understands the pdengine bound type this chart's CRD
+version: 0.3.9
+# Matches decisionGen.image.tag (4pdosc/llm-scaler-decision-gen:0.8.1). 0.8.0 is
+# the first release that understands the pdengine bound type this chart's CRD
 # carries and reads DisaggregatedSets (granted in the ClusterRole).
-appVersion: "0.8.0"
+appVersion: "0.8.1"
