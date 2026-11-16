@@ -2,7 +2,9 @@ image:
   # Public images on Docker Hub. Override this (and the two sidecars below) to
   # pull from your own registry -- worth doing if your cluster has no egress.
   repository: 4pdosc/cache_aware_router
-  tag: ""              # empty falls back to Chart.appVersion
+  tag: ""              # empty falls back to Chart.appVersion. Since 0.6.6
+                       # the tag has no `v` (0.6.6, not v0.6.6); v0.6.4 and
+                       # earlier kept it, and are linux/amd64 only.
   pullPolicy: IfNotPresent
 
 replicas: 2                # master/standby: two replicas, only the leader takes traffic (see ha below)
