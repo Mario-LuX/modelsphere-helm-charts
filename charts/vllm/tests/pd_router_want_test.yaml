@@ -1,0 +1,69 @@
+# The router's wait-upstreams init container needs the per-role group counts,
+# but they must not be inlined into the router pod template: an inlined count
+# turns every pd.prefill/decode.replicas change into a rollout of every router
+# Deployment. The counts live in the <fullname>-pd-want ConfigMap instead and
+# reach the init container through configMapKeyRef.
+suite: pd router wait-upstreams counts come from a ConfigMap
+release:
+  name: ci
+  namespace: ci
+set:
+  modelRoute.nginx.outputConfigMap: ci/openresty-conf
+  pd.enabled: true
+  rdma.enabled: true
+  scaler.enabled: false
+  pd.prefill.gpus: 8
+  pd.decode.gpus: 8
+  pd.prefill.replicas: 3
+  pd.decode.replicas: 5
+  model.localPath: /models/x
+tests:
+  - it: pd-want ConfigMap carries the per-role replica counts
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-pd-want
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: data.prefill
+          value: "3"
+      - equal:
+          path: data.decode
+          value: "5"
+
+  - it: wait-upstreams reads the counts from the ConfigMap, not from its script
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[?(@.name == "wait-upstreams")].env
+          value:
+            - name: PF_WANT
+              valueFrom: { configMapKeyRef: { name: ci-pd-want, key: prefill } }
+            - name: DC_WANT
+              valueFrom: { configMapKeyRef: { name: ci-pd-want, key: decode } }
+      - notMatchRegex:
+          path: spec.template.spec.initContainers[?(@.name == "wait-upstreams")].args[0]
+          pattern: '(PF|DC)_WANT='
+
+  # Nothing in the router scripts may echo the role replica counts. Odd values
+  # that appear nowhere else in the render, so a match can only be a count.
+  - it: router pod template does not mention the role replica counts
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    set:
+      pd.prefill.replicas: 31
+      pd.decode.replicas: 37
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.initContainers[?(@.name == "wait-upstreams")].args[0]
+          pattern: '\b(31|37)\b'
+      - notMatchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: '\b(31|37)\b'

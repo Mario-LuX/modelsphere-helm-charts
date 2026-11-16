@@ -185,3 +185,33 @@ tests:
       - notMatchRegex:
           path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
           pattern: '127\.0\.0\.1'
+
+  # Shrink drift is exercised by hack/test-pd-router-probe.sh, which runs the
+  # rendered probe against fake DNS and engines. This pins the one guard whose
+  # loss would be fleet-wide: an empty answer for any role (resolver blip,
+  # atomic re-roll) must never restart a router on shrink.
+  - it: pd-ds liveness never acts on shrink while a role resolves empty
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
+          pattern: '\[ -n "\$resolved" \] && \[ "\$all_resolve" -eq 1 \] \|\| return 0\n'
+
+  # An empty role at boot waits instead of exiting: exiting turned an engine
+  # set that is not placed yet into CrashLoopBackOff, whose backoff then held
+  # the router back after the engines came up. The startupProbe bounds it.
+  - it: pd-ds router boot waits on an empty role without an attempt cap
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: 'i=0\n\s*while :; do\n\s*i=\$\(\(i\+1\)\)'
+      - notMatchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: 'seq 1 60|exit 1'

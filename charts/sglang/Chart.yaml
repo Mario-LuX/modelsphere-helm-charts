@@ -5,7 +5,7 @@ home: https://github.com/modelsphere/helm-charts
 sources:
   - https://github.com/modelsphere/helm-charts
 type: application
-version: 0.9.36
+version: 0.9.37
 appVersion: "1.0.0"
 
 # CART comes from the single chart in this repo (repository: file://../cart),
