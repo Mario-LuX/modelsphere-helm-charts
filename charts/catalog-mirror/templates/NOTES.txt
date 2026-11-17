@@ -1,5 +1,10 @@
-catalog-mirror is deployed as {{ include "catalog-mirror.fullname" . }}. It becomes Ready once the
+catalog-mirror is deployed as {{ include "catalog-mirror.fullname" . }}.
+{{- if .Values.sync.enabled }} It becomes Ready once the
 first sync round has published the catalog index.
+{{- else }} Sync is off: it serves the copy from
+ConfigMap {{ .Values.snapshot.configMap }} and nothing refreshes it. A newer copy is a new
+ConfigMap content and a new snapshot.checksum.
+{{- end }}
 
 Point swiss at it in the site profile (swissd re-reads it within a minute):
 
@@ -9,5 +14,5 @@ Point swiss at it in the site profile (swissd re-reads it within a minute):
       url: {{ include "catalog-mirror.url" . }}/model-catalog/
       default: true
 
-Last sync result:  {{ include "catalog-mirror.url" . }}/status.json
+Last {{ if .Values.sync.enabled }}sync{{ else }}snapshot{{ end }} result:  {{ include "catalog-mirror.url" . }}/status.json
 Verify the copy:   helm test {{ .Release.Name }} -n {{ .Release.Namespace }}

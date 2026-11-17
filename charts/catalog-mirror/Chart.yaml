@@ -5,8 +5,8 @@ home: https://github.com/modelsphere/helm-charts
 sources:
   - https://github.com/modelsphere/helm-charts
 type: application
-version: 0.1.0
+version: 0.2.0
 # The sync script ships inside the chart (files/sync.py), so the chart version is
 # the version of what runs; appVersion follows it.
-appVersion: "0.1.0"
+appVersion: "0.2.0"
 keywords: [swiss, model-catalog, mirror, helm-repository]

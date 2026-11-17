@@ -3,7 +3,10 @@
 
 swiss reads two things over HTTP:
   catalog    <base>/index.json, then every version file it names
-             (models/<name>/<name>-<version>.yaml), each pinned by a sha256 digest
+             (models/<name>/<name>-<version>.yaml), each pinned by a sha256 digest;
+             and <base>/index-v2.json, the index a site profile reads with
+             schemaVersion v2: every variant file it names, pinned the same way,
+             and each variant's history.json
   chartRepo  <base>/index.yaml, then the chart archives it lists
 
 Upstream both live on GitHub Pages, whose reachability from some clusters is
@@ -173,6 +176,63 @@ def sync_catalog():
     return f"catalog: {len(idx.get('models', []))} models, {got} version files fetched, {kept} unchanged, {reports} reports"
 
 
+def sync_catalog_v2():
+    """index-v2.json and what it names. A catalog that publishes no v2 index is
+    not an error: older catalogs, and other mirrors, have only index.json."""
+    root = os.path.join(DATA, "model-catalog")
+    base = CATALOG_URL if CATALOG_URL.endswith("/") else CATALOG_URL + "/"
+    index_path = os.path.join(root, "index-v2.json")
+    try:
+        raw, etag = fetch(urllib.parse.urljoin(base, "index-v2.json"),
+                          etag=load_etags().get("catalog-v2") if os.path.exists(index_path) else None,
+                          with_etag=True)
+    except RuntimeError as e:
+        if "HTTP Error 404" in str(e):
+            return "catalog v2: upstream publishes no index-v2.json"
+        raise
+    if raw is None:
+        return "catalog v2: unchanged (304)"
+    idx = json.loads(raw)
+    got = kept = hist = reports = 0
+    for m in idx.get("models", []):
+        for v in m.get("variants", []):
+            rel = safe_rel(v["path"])
+            algo, _, want = v.get("digest", "").partition(":")
+            if algo != "sha256" or not want:
+                raise ValueError(f"{m['name']} {v.get('id')}: no sha256 digest")
+            dst = os.path.join(root, rel)
+            if local_sha(dst) == want:
+                kept += 1
+            else:
+                body = fetch(urllib.parse.urljoin(base, rel))
+                if sha256(body) != want:
+                    raise ValueError(f"{rel}: sha256 {sha256(body)[:12]} != index digest {want[:12]}")
+                write_atomic(dst, body)
+                got += 1
+            # A history grows with every release of its variant, so unlike the
+            # variant files it is not immutable: fetched whenever the index moved.
+            if v.get("history"):
+                h = safe_rel(v["history"])
+                write_if_changed(os.path.join(root, h), fetch(urllib.parse.urljoin(base, h)))
+                hist += 1
+        dirs = {os.path.dirname(v["path"]) for v in m.get("variants", []) if v.get("path")}
+        mdir = dirs.pop() if len(dirs) == 1 else f"models/{m['name']}"
+        for name in m.get("reports") or []:
+            rel = safe_rel(name if "/" in name else f"{mdir}/{name}")
+            dst = os.path.join(root, rel)
+            if os.path.exists(dst):
+                continue
+            try:
+                write_atomic(dst, fetch(urllib.parse.urljoin(base, rel)))
+                reports += 1
+            except Exception as e:  # noqa: BLE001 -- reports are links, not deploy inputs
+                log(f"catalog v2: report {rel} skipped: {e}")
+    write_if_changed(index_path, raw)  # last: everything it names is in place
+    save_etag("catalog-v2", etag)
+    return (f"catalog v2: {len(idx.get('models', []))} models, {got} variant files fetched, "
+            f"{kept} unchanged, {hist} histories, {reports} reports")
+
+
 # An archive URL in index.yaml is absolute (chart-releaser: GitHub Releases) or
 # relative to the repo URL (ChartMuseum, Harbor: charts/<name>.tgz). Group 3 is the
 # file name the mirror stores it under.
@@ -213,10 +273,24 @@ def sync_charts():
     return f"charts: {len(urls)} archives, {got} fetched, {kept} unchanged"
 
 
+def sync_catalog_both():
+    """v1 and v2 are independent copies: one failing must not skip the other,
+    nor hide that the other moved forward."""
+    done, failed = [], []
+    for fn in (sync_catalog, sync_catalog_v2):
+        try:
+            done.append(fn())
+        except Exception as e:  # noqa: BLE001 -- reported below with what did succeed
+            failed.append(f"{fn.__name__}: {e}")
+    if failed:
+        raise RuntimeError("; ".join(failed + [f"done: {d}" for d in done]))
+    return "; ".join(done)
+
+
 def round_once():
     status = {"time": datetime.now(timezone.utc).isoformat(timespec="seconds")}
     ok = True
-    for name, fn in (("catalog", sync_catalog), ("charts", sync_charts)):
+    for name, fn in (("catalog", sync_catalog_both), ("charts", sync_charts)):
         try:
             msg = fn()
             status[name] = {"ok": True, "detail": msg}

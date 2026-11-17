@@ -9,3 +9,5 @@ data:
 {{ .Files.Get "files/sync.py" | indent 4 }}
   nginx.conf: |-
 {{ .Files.Get "files/nginx.conf" | indent 4 }}
+  snapshot.py: |-
+{{ .Files.Get "files/snapshot.py" | indent 4 }}
