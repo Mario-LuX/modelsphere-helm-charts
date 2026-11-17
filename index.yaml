@@ -160,6 +160,26 @@ entries:
     version: 0.1.13
   bodylog-exporter:
   - apiVersion: v2
+    appVersion: 0.2.14
+    created: "2026-11-17T07:27:15.787833046Z"
+    description: Turns the body-log listener's detail records into Prometheus metrics,
+      and polls the router's control-plane endpoints for live routing state
+    digest: a336adfea7443648f3cf919e7bf8ab7d256052d892f65cecae6a35ac9c78df55
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - bodylog
+    - exporter
+    - prometheus
+    - observability
+    name: bodylog-exporter
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/modelsphere/llm-openresty
+    type: application
+    urls:
+    - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/bodylog-exporter-0.3.7/bodylog-exporter-0.3.7.tgz
+    version: 0.3.7
+  - apiVersion: v2
     appVersion: 0.2.13
     created: "2026-11-05T03:17:57.147192815Z"
     description: Turns the body-log listener's detail records into Prometheus metrics,
@@ -329,6 +349,25 @@ entries:
     version: 0.1.1
   cart:
   - apiVersion: v2
+    appVersion: 0.6.6
+    created: "2026-11-17T07:27:16.064323292Z"
+    description: 'Cache-aware router: routes each request to the replica that already
+      holds the longest matching prompt prefix, while keeping load balanced'
+    digest: bc170ea1e4881b3c981ef99018f68ae6784284fad71d09d78373c77e5b5b9140
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - cache-aware-router
+    - routing
+    - autoconfig
+    name: cart
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/modelsphere/cache_aware_router
+    type: application
+    urls:
+    - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/cart-0.2.4/cart-0.2.4.tgz
+    version: 0.2.4
+  - apiVersion: v2
     appVersion: v0.6.4
     created: "2026-10-23T08:17:57.689686291Z"
     description: 'Cache-aware router: routes each request to the replica that already
@@ -406,6 +445,26 @@ entries:
     version: 0.2.0
   catalog-mirror:
   - apiVersion: v2
+    appVersion: 0.2.0
+    created: "2026-11-17T07:27:16.359723896Z"
+    description: In-cluster copy of the model catalog and this helm chart repository,
+      for clusters whose route to GitHub is slow or unreliable; swiss is pointed at
+      it instead of GitHub Pages
+    digest: 888f496bf4fd7b63dd504a12fb854e23a71a4339ec78779e034ff10ef2e8f972
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - swiss
+    - model-catalog
+    - mirror
+    - helm-repository
+    name: catalog-mirror
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    type: application
+    urls:
+    - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/catalog-mirror-0.2.0/catalog-mirror-0.2.0.tgz
+    version: 0.2.0
+  - apiVersion: v2
     appVersion: 0.1.0
     created: "2026-10-14T07:09:50.347426493Z"
     description: In-cluster copy of the model catalog and this helm chart repository,
@@ -426,6 +485,30 @@ entries:
     - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/catalog-mirror-0.1.0/catalog-mirror-0.1.0.tgz
     version: 0.1.0
   console:
+  - apiVersion: v2
+    appVersion: 0.2.2
+    created: "2026-11-17T07:27:16.648961703Z"
+    dependencies:
+    - condition: swiss.enabled
+      name: swiss
+      repository: oci://ghcr.io/modelsphere/charts
+      version: 0.7.0
+    description: ModelSphere community portal — identity (users, roles, login) and
+      a federation gateway to Swiss and other backends.
+    digest: d99c51765ceeff90cce50b6ad497dfd805b19a053aaa2a8df3a52724284eee78
+    home: https://github.com/modelsphere/console
+    keywords:
+    - console
+    - llm
+    - inference
+    - portal
+    name: console
+    sources:
+    - https://github.com/modelsphere/console
+    type: application
+    urls:
+    - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/console-0.2.2/console-0.2.2.tgz
+    version: 0.2.2
   - apiVersion: v2
     appVersion: 0.2.1
     created: "2026-10-23T08:17:57.91013898Z"
@@ -1028,6 +1111,31 @@ entries:
   sglang:
   - apiVersion: v2
     appVersion: 1.0.0
+    created: "2026-11-17T07:27:16.971406741Z"
+    dependencies:
+    - condition: cart.enabled
+      name: cart
+      repository: file://../cart
+      version: 0.2.4
+    - alias: continuationGateway
+      condition: continuationGateway.enabled
+      name: continuation-gateway
+      repository: file://../continuation-gateway
+      version: 0.1.4
+    description: SGLang inference deployment -- single-node, multi-node (LeaderWorkerSet)
+      or prefill/decode-disaggregated (DisaggregatedSet or merged colocate pod), with
+      optional cache-aware routing, autoscaling and hang detection
+    digest: b0fd22c6ff6fc55b1e12fcc1f9fe22adfd7a37572b8c40deac9a242914f56ea8
+    home: https://github.com/modelsphere/helm-charts
+    name: sglang
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    type: application
+    urls:
+    - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/sglang-0.9.37/sglang-0.9.37.tgz
+    version: 0.9.37
+  - apiVersion: v2
+    appVersion: 1.0.0
     created: "2026-11-10T06:33:47.388916632Z"
     dependencies:
     - condition: cart.enabled
@@ -1478,6 +1586,30 @@ entries:
   vllm:
   - apiVersion: v2
     appVersion: 1.0.0
+    created: "2026-11-17T07:27:17.30034653Z"
+    dependencies:
+    - condition: cart.enabled
+      name: cart
+      repository: file://../cart
+      version: 0.2.4
+    - alias: continuationGateway
+      condition: continuationGateway.enabled
+      name: continuation-gateway
+      repository: file://../continuation-gateway
+      version: 0.1.4
+    description: vLLM inference deployment -- single-node or multi-node (LeaderWorkerSet),
+      with optional cache-aware routing, autoscaling and hang detection
+    digest: 01564a7682a4919de9647c0d0cd249a985cfc7bf612b60d0b209ea7f84dc078d
+    home: https://github.com/modelsphere/helm-charts
+    name: vllm
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    type: application
+    urls:
+    - https://github.com/Mario-LuX/modelsphere-helm-charts/releases/download/vllm-0.9.8/vllm-0.9.8.tgz
+    version: 0.9.8
+  - apiVersion: v2
+    appVersion: 1.0.0
     created: "2026-11-10T06:33:47.610560023Z"
     dependencies:
     - condition: cart.enabled
@@ -1852,4 +1984,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-11-10T06:33:47.610767814Z"
+generated: "2026-11-17T07:27:17.300710811Z"
